@@ -1,0 +1,30 @@
+[project]
+name = "graphnetworks"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "altair>=6.2.2",
+    "altair-nx>=1.3",
+    "anywidget>=0.11.0",
+    "ipykernel>=7.3.0",
+    "ipywidgets>=8.1.9",
+    "kagglehub>=1.0.2",
+    "matplotlib>=3.11.1",
+    "nbformat>=5.11.1",
+    "networkx>=3.6.1",
+    "numpy>=2.5.2",
+    "ogb>=1.3.6",
+    "optuna>=4.9.0",
+    "pandas>=3.0.5",
+    "plotly>=7.0.0",
+    "pyarrow>=25.0.1",
+    "scikit-learn>=1.9.0",
+    "scipy>=1.18.1",
+    "scipy-stubs~=1.18.1",
+    "tabulate>=0.10.0",
+    "torch>=2.13.0",
+    "torch-geometric==2.8.0.post1",
+    "umap-learn>=0.5.12",
+    "vegafusion>=2.0.3",
+    "vl-convert-python>=1.9.0.post1",
+]
