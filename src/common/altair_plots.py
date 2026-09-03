@@ -2,6 +2,7 @@ import os
 import pathlib
 import random
 from collections import Counter
+from typing import NotRequired, TypedDict
 import pandas as pd
 
 import networkx as nx
@@ -9,11 +10,26 @@ from torch_geometric.utils import to_networkx
 
 import altair as alt
 import altair_nx as anx
+import matplotlib as mpl
+from matplotlib.colors import to_hex
+
+
+class GraphPlotParams(TypedDict):
+    """Shape of the `graph_params` dict passed around EDA notebooks to feed `plot_label_distribution`."""
+    plots_path: pathlib.Path | str
+    name: str
+    label_dict: dict
+    title: str
+    subtitle: str
+    split: str
+    width: NotRequired[int]
+    height: NotRequired[int]
 
 
 def plot_label_distribution(
-    labels, path_to_graph: pathlib, graph_name : str | None = None,  label_dict=None, title= "Type of papers distribution",
-        subtitle: str | bool = '', split: str | bool = False, display= True):
+    labels, path_to_graph: pathlib.Path | str, graph_name : str | None = None,  label_dict=None,
+        title= "Type of papers distribution", subtitle: str | bool = '',
+        split: str | bool = False, display= True, width= 300, height= 250):
     """
     Counts graph labels and saves an interactive, portfolio-ready Altair chart to HTML.
 
@@ -29,7 +45,11 @@ def plot_label_distribution(
         :param labels: A PyTorch tensor, numpy array, or list of node labels
         :param display: A boolean flag to determine whether to display the chart.
         :param label_dict: A dictionary mapping labels to their corresponding names.
+        :param height: Plot height
+        :param width: Plot width
     """
+    path_to_graph = pathlib.Path(path_to_graph)
+
     # Convert tensor/array to a Python list
     if label_dict is None:
         label_dict = {}
@@ -58,7 +78,7 @@ def plot_label_distribution(
         .mark_bar(
             cornerRadiusTopLeft=4,
             cornerRadiusTopRight=4,
-            color="#5778A4",  # Clean, professional portfolio blue
+            color="#5778A4",  # blue
         )
         .encode(
             x=alt.X(
@@ -83,8 +103,8 @@ def plot_label_distribution(
                 subtitleFontSize=13,
                 subtitleColor="#666666",
             ),
-            width=300,
-            height=250,
+            width=width,
+            height=height,
         )
         .configure_view(strokeWidth=0)  # Removes ugly outer box borders
         .configure_axis(
@@ -96,8 +116,7 @@ def plot_label_distribution(
     )
 
     # Save to standalone HTML
-    if not path_to_graph.exists():
-        os.makedirs(path_to_graph)
+    path_to_graph.mkdir(parents=True, exist_ok=True)
     chart.save(f'{path_to_graph}/{graph_name}.html')
     chart.save(f'{path_to_graph}/{graph_name}.svg')
     if display:
@@ -139,11 +158,59 @@ def compute_layout(g, graph_type: str | None=None, seed=142):
     return pos
 
 
-def plot_graph(g, pos, node_tooltip: str | list[str] | None, node_colour="paper_topic", nodes=120,
+def build_categorical_palette(n_colours: int, cmap_name: str = "turbo") -> list[str]:
+    """
+    Builds a list of `n_colours` visually distinct hex colours for
+    categorical encodings that exceed the ~20-colour limit of Altair/
+    Vega-Lite's built-in schemes (e.g. "set2", "tableau10").
+
+    For n_colours <= 60, concatenates matplotlib's qualitative tab20 /
+    tab20b / tab20c palettes (60 distinct swatches). Beyond that, it falls
+    back to evenly spaced samples from a continuous colormap (default
+    "turbo"), so any number of categories still gets a usable, if less
+    qualitative, palette.
+
+    :param n_colours: Number of distinct colours required.
+    :param cmap_name: Matplotlib colormap used for > fallback 60.
+    """
+    qualitative = [
+        colour
+        for name in ("tab20", "tab20b", "tab20c")
+        for colour in mpl.colormaps[name].colors
+    ]
+
+    if n_colours <= len(qualitative):
+        colours = qualitative[:n_colours]
+    else:
+        continuous = mpl.colormaps[cmap_name]
+        denom = max(n_colours - 1, 1)
+        colours = [continuous(i / denom) for i in range(n_colours)]
+
+    return [to_hex(colour) for colour in colours]
+
+
+def plot_graph(g, pos, node_tooltip: list[str] | None, node_colour="paper_topic", nodes=120,
                sampling_type="spring", dataset_name="Cora", node_size=120,
                node_label:str|None=None, edge_colour="#9C9C9C", edge_width=0.8,
                edge_legend=None, alpha=0.7, curved_edges=True, path_to_plots='plots',
-               plot_name='cora_graph', display=True, cmap="set2"):
+               plot_name='cora_graph', display=True, cmap="tableau10",
+               max_scheme_categories=20, extended_cmap="turbo"):
+
+    node_encode_kwargs = None
+    categories = sorted({str(v) for v in nx.get_node_attributes(g, node_colour).values()})
+    if len(categories) > max_scheme_categories:
+        palette = build_categorical_palette(len(categories), cmap_name=extended_cmap)
+        node_encode_kwargs = {
+            "fill": alt.Color(
+                f"{node_colour}:N",
+                scale=alt.Scale(domain=categories, range=palette),
+                legend=alt.Legend(
+                    title=node_colour,
+                    symbolLimit=len(categories),
+                    columns=2,
+                ),
+            )
+        }
 
     chart = anx.draw_networkx(g,
     pos=pos,
@@ -156,6 +223,7 @@ def plot_graph(g, pos, node_tooltip: str | list[str] | None, node_colour="paper_
     edge_width=edge_width,
     edge_legend=edge_legend,
     node_tooltip=node_tooltip,
+    node_encode_kwargs=node_encode_kwargs,
     curved_edges=curved_edges).properties(width=800,
     height=500,
     title={"text":f"Graph Visualization - Dataset: {dataset_name}",
