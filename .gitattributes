@@ -1,0 +1,2 @@
+# Keep notebooks out of the GitHub language statistics; they are mostly saved outputs.
+*.ipynb linguist-detectable=false
