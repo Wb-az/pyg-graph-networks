@@ -66,3 +66,62 @@ def test_write_summary_reflects_only_given_rows(tmp_path):
     assert summary.loc["Test acc", "mean"] == pytest.approx(0.705)
     on_disk = pd.read_csv(path, index_col=0)
     assert on_disk.loc["Test acc", "mean"] == pytest.approx(0.705)
+
+
+# --- resume pre-flight -------------------------------------------------------
+import json
+
+from src.node_classification.ogb_run import (build_parser, resume_problem, resumable_config,
+                                             validate_args, write_run_config)
+from datetime import datetime
+
+FLAGS = "--dataset ogbn-arxiv --model SAGE --num_layers 3 --no-scheduler --no-dataloader"
+
+
+def _args(flags=FLAGS):
+    parser = build_parser()
+    return validate_args(parser, parser.parse_args(flags.split()))
+
+
+def _interrupted(tmp_path, flags=FLAGS, status="running", seeds=(0, 1)):
+    config, results = tmp_path / "t_config.json", tmp_path / "t_results.csv"
+    write_run_config(config, _args(flags), status=status, started=datetime.now())
+    pd.DataFrame([_row(s, 0.7) for s in seeds]).to_csv(results, index=False)
+    return config, results
+
+
+def test_resume_problem_none_for_same_flags(tmp_path):
+    config, results = _interrupted(tmp_path)
+    assert resume_problem(config, results, _args(FLAGS + " --resume --log_steps 5")) is None
+
+
+def test_resume_problem_reports_each_differing_flag(tmp_path):
+    config, results = _interrupted(tmp_path)
+    problem = resume_problem(config, results, _args(FLAGS + " --lr 0.01 --hidden_channels 64"))
+    assert "--lr" in problem and "--hidden_channels" in problem
+    assert "--dropout" not in problem
+
+
+def test_resume_problem_finished_run(tmp_path):
+    config, results = _interrupted(tmp_path, status="done")
+    assert "already finished" in resume_problem(config, results, _args())
+
+
+def test_resume_problem_missing_files(tmp_path):
+    config, results = tmp_path / "t_config.json", tmp_path / "t_results.csv"
+    assert "config" in resume_problem(config, results, _args())
+    write_run_config(config, _args(), status="running", started=datetime.now())
+    assert "no seed finished" in resume_problem(config, results, _args())
+
+
+def test_resume_problem_config_written_by_older_script(tmp_path):
+    config, results = _interrupted(tmp_path)
+    payload = json.loads(config.read_text())
+    del payload["config"]["weight_power"]           # key the old script did not know
+    config.write_text(json.dumps(payload))
+    assert "--weight_power" in resume_problem(config, results, _args())
+
+
+def test_resumable_config_survives_json_roundtrip():
+    cfg = resumable_config(_args())
+    assert json.loads(json.dumps(cfg)) == cfg

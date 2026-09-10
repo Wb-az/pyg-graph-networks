@@ -109,10 +109,11 @@ def main(args):
     # same flags; it compares flags only, not code, hence the banner.
     all_history, run_results, done_seeds = [], [], set()
     resumed = False
-    if args.resume and config_path.exists() and results_path.exists():
-        with open(config_path) as f:
-            previous = json.load(f)
-        if previous.get("status") == "running" and previous.get("config") == resumable_config(args):
+    if args.resume:
+        problem = resume_problem(config_path, results_path, args)
+        if problem is None:
+            with open(config_path) as f:
+                previous = json.load(f)
             run_results = pd.read_csv(results_path).to_dict("records")
             all_history = pd.read_csv(history_path).to_dict("records")
             done_seeds = {int(r["seed"]) for r in run_results}
@@ -124,12 +125,14 @@ def main(args):
                 print(f"  seed {int(r['seed']):>6}  acc={r['acc']:.4f}  finished {r['finished']}")
             print(f"  seeds still to train: {[s for s in args.seeds if s not in done_seeds]}")
             print("=" * 100)
-        elif previous.get("status") == "running":
-            print(f"Warning: partial outputs for {tag} come from different flags; starting fresh")
-        elif previous.get("status") == "done":
-            print(f"Warning: {tag} already finished on {previous.get('finished')}; starting fresh")
-    elif args.resume:
-        print(f"Nothing to resume for {tag}; starting fresh")
+        elif not config_path.exists() and not results_path.exists():
+            print(f"Nothing to resume for {tag}; starting fresh")
+        else:
+            # --resume was asked for and cannot be honoured: stop rather than
+            # delete the partial seeds. The user drops --resume to start over.
+            raise SystemExit(f"Cannot resume {tag}: {problem}\n"
+                             f"Existing {tag}_* files were left untouched. Fix the flags, or "
+                             f"drop --resume to start over (deletes them).")
     if not resumed:
         removed = clear_tag_outputs(metrics_dir, checkpoint_dir, args.dataset.lower(), tag)
         if removed:
@@ -318,6 +321,32 @@ def resumable_config(args) -> dict:
             if k not in ("resume", "log_steps", "num_workers")}
 
 
+def resume_problem(config_path, results_path, args):
+    """Why the outputs at these paths cannot continue under ``args``; None if they can.
+
+    Used by ``main`` for ``--resume`` and by the notebook as a pre-flight check,
+    so a mismatch is visible before anything is deleted.
+    """
+    if not config_path.exists():
+        return f"{config_path.name} is missing"
+    if not results_path.exists():
+        return f"{results_path.name} is missing (no seed finished)"
+    with open(config_path) as f:
+        previous = json.load(f)
+    status = previous.get("status")
+    if status == "done":
+        return f"the run already finished on {previous.get('finished')}"
+    if status != "running":
+        return f"unknown status {status!r} in {config_path.name}"
+    old, new = previous.get("config") or {}, resumable_config(args)
+    diff = {k: (old.get(k, "<absent>"), new.get(k, "<absent>"))
+            for k in sorted(set(old) | set(new)) if old.get(k) != new.get(k)}
+    if diff:
+        lines = [f"  --{k}: on disk {a!r}, now {b!r}" for k, (a, b) in diff.items()]
+        return "the flags differ from the interrupted run\n" + "\n".join(lines)
+    return None
+
+
 def write_run_config(path, args, status: str, started: datetime, finished=None,
                      minutes=None, **extra) -> None:
     payload = {"status": status,
@@ -369,7 +398,8 @@ def validate_args(parser, args):
         print("Warning: full-batch evaluation of ogbn-products may not fit in memory; "
               "consider --eval layerwise")
 
-    if args.scheduler_patience is None:
+    patience_given = args.scheduler_patience is not None
+    if not patience_given:
         args.scheduler_patience = max(1, args.early_stop // 2)
     if args.scheduler:
         if args.scheduler_patience < 1:
@@ -378,7 +408,7 @@ def validate_args(parser, args):
             parser.error(f"--scheduler_patience ({args.scheduler_patience}) must be smaller "
                          f"than --early_stop ({args.early_stop}), otherwise early stopping "
                          "ends the run before the learning rate is ever reduced")
-    elif is_set("scheduler_patience") or is_set("scheduler_metric"):
+    elif patience_given or is_set("scheduler_metric"):
         print("Warning: --scheduler_patience / --scheduler_metric ignored with --no-scheduler")
     return args
 
