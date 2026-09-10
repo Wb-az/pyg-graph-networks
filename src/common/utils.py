@@ -1,8 +1,10 @@
 import random
+from collections.abc import Sequence
+
 import numpy as np
 
 import torch
-from torch_geometric.loader import NeighborLoader
+from torch_geometric.loader import DataLoader, ImbalancedSampler, NeighborLoader
 
 from src.common.evaluation_metrics import Metrics
 
@@ -45,24 +47,72 @@ def compute_class_weights(y: torch.Tensor, mask: torch.Tensor | None = None,
     return labels.numel() / (num_classes * counts)
 
 
-def make_neighbor_loader(data, input_nodes, num_neighbors=(15, 10),
-                         batch_size=1024, shuffle=True) -> NeighborLoader:
+def create_dataloaders(data, loader_type: str = "neighbor", batch_size: int = 1024,
+                       num_neighbors: int | Sequence[int] = (15, 10),
+                       num_layers: int = 2, balanced: bool = False,
+                       eval_loaders: bool = False, eval_batch_size: int = 4096,
+                       num_workers: int = 0) -> dict[str, DataLoader | NeighborLoader | None]:
     """
-    Mini-batch NeighborLoader for a single large graph -- not needed for
-    Cora or ogbn-arxiv (both fit full-batch comfortably), kept ready for a
-    future larger dataset (e.g. ogbn-products).
+    Loaders for a single-graph node-classification dataset, returned as
+    ``{"train", "val", "test"}``. "val"/"test" are None unless
+    ``eval_loaders=True``; when the graph fits in memory (Cora, ogbn-arxiv)
+    use the full-batch ``evaluate`` instead.
 
-    :param data: A single-graph Data object.
-    :param input_nodes: Seed/target nodes to sample around, e.g. data.train_mask.
-    :param num_neighbors: Fanout per hop, one entry per GNN layer
-        (e.g. (15, 10) for a 2-layer model).
-    :param batch_size: Number of seed nodes per mini-batch.
-    :param shuffle: A boolean flag to shuffle the data before each epoch.
+    ``"neighbor"``: NeighborLoader over the split's seed nodes (first
+    ``batch_size`` rows of each batch) with sampled ``num_neighbors`` per
+    hop for training and the full neighbourhood for eval. Keep ``data`` on
+    the CPU; batches are moved to the device in the epoch functions.
+    ``"full"``: one batch holding the whole graph, so the same loop can run
+    full-batch training for a like-for-like comparison.
+
+    :param num_neighbors: Fan-out per layer, e.g. (15, 10); -1 = all. An
+        int is expanded to ``num_layers`` entries.
+    :param balanced: Sample training seeds with ImbalancedSampler
+        (inverse class frequency, with replacement).
+    :param num_workers: Keep 0 on macOS; process spawn outweighs sampling.
     """
-    return NeighborLoader(
-        data, num_neighbors=list(num_neighbors), input_nodes=input_nodes,
-        batch_size=batch_size, shuffle=shuffle,
-    )
+    if loader_type == "full":
+        loader = DataLoader([data], batch_size=1, shuffle=False)
+        eval_loader = loader if eval_loaders else None
+        return {"train": loader, "val": eval_loader, "test": eval_loader}
+    if loader_type != "neighbor":
+        raise ValueError(f"loader_type must be 'neighbor' or 'full', got {loader_type!r}")
+
+    if isinstance(num_neighbors, int):
+        num_neighbors = [num_neighbors] * num_layers
+    num_neighbors = list(num_neighbors)
+
+    sampler = ImbalancedSampler(data, input_nodes=data.train_mask) if balanced else None
+    loaders = {
+        "train": NeighborLoader(
+            data, num_neighbors=num_neighbors, input_nodes=data.train_mask,
+            batch_size=batch_size, shuffle=sampler is None, sampler=sampler,
+            num_workers=num_workers,
+        ),
+        "val": None,
+        "test": None,
+    }
+    if eval_loaders:
+        # Full neighbourhood reproduces full-batch predictions for SAGE/GAT,
+        # not GCN (its symmetric norm also sees the sampled neighbours' degrees).
+        for split in ("val", "test"):
+            loaders[split] = NeighborLoader(
+                data, num_neighbors=[-1] * len(num_neighbors),
+                input_nodes=getattr(data, f"{split}_mask"),
+                batch_size=eval_batch_size, shuffle=False, num_workers=num_workers,
+            )
+    return loaders
+
+
+def _target_index(batch, mask_name: str):
+    """
+    Rows to score: the seed nodes (first ``batch_size`` rows) of a
+    NeighborLoader batch, else ``batch[mask_name]`` for a full-graph batch,
+    whose ``batch_size`` is the number of graphs.
+    """
+    if "n_id" in batch:
+        return slice(0, batch.batch_size)
+    return batch[mask_name]
 
 
 def train_one_epoch(data, model, criterion, optimizer, mask) -> Metrics:
@@ -83,59 +133,112 @@ def train_one_epoch(data, model, criterion, optimizer, mask) -> Metrics:
 
 
 @torch.no_grad()
-def evaluate(data, model, criterion, mask,
-                include_auc: bool = False, include_cal=False) -> Metrics:
+def evaluate(data, model, criterion, mask, include_auc: bool = False,
+             include_cal: bool = False, out: torch.Tensor | None = None) -> Metrics:
     """Evaluates `model` on `mask` (e.g. data.val_mask / data.test_mask).
     Set include_auc=True only for the final best-checkpoint report (see
-    Metrics' docstring for why it's off by default).
+    Metrics' docstring for why it's off by default). Pass precomputed
+    full-graph logits as `out` (e.g. from `inference_layerwise`) to skip
+    the forward pass.
     """
-    model.eval()
-    out = model(data.x, data.edge_index)
-    loss = criterion(out[mask], data.y[mask])
+    if out is None:
+        model.eval()
+        out = model(data.x, data.edge_index)
+    y = data.y[mask].to(out.device)  # data may be on the CPU when `out` is given
+    loss = criterion(out[mask], y)
     probs = torch.softmax(out[mask], dim=1) if include_auc else None
     pred = out[mask].argmax(dim=1)
-    return Metrics.compute(data.y[mask], pred, loss.item(), y_proba=probs,
+    return Metrics.compute(y, pred, loss.item(), y_proba=probs,
                            include_auc=include_auc, include_cal=include_cal)
 
 
-def train_one_epoch_loader(loader: NeighborLoader, model, criterion,
-                           optimizer, device) -> Metrics:
-    """Mini-batch training epoch over a NeighborLoader (or any NodeLoader).
+@torch.no_grad()
+def inference_layerwise(model, data, device, batch_size: int = 4096) -> torch.Tensor:
+    """
+    Full-graph logits computed one layer at a time, for graphs whose
+    edge-level messages don't fit in memory (e.g. ogbn-products). Each pass
+    loads a batch of nodes with its full one-hop neighbourhood, so memory
+    scales with batch_size * degree rather than with the edge count.
+    Exact for SAGE, SAGEBN, GATv2 and GConv; GCN's symmetric normalisation needs
+    source-node degrees the one-hop subgraph doesn't have, so don't use it
+    for GCN. `data` stays on the CPU; `model` must already be on `device`.
+    """
+    model.eval()
+    loader = NeighborLoader(data, num_neighbors=[-1], input_nodes=None,
+                            batch_size=batch_size, shuffle=False)
+    x_all = data.x
+    norms = getattr(model, "norms", None)  # GraphSAGEBN: norm between conv and activation
+    for i, layer in enumerate(model.layers):
+        outs = []
+        for batch in loader:
+            x = x_all[batch.n_id].to(device)
+            x = layer(x, batch.edge_index.to(device))[:batch.batch_size]
+            if norms is not None:
+                x = norms[i](x)
+            outs.append(model.activation(x).cpu())
+        x_all = torch.cat(outs)
+    return model.lin1(x_all.to(device))
 
-    Each mini-batch's first `batch.batch_size` nodes are the seed/target
-    nodes being trained on; the rest are sampled k-hop neighbours included
-    only for message passing -- per NeighborLoader's contract, loss and
-    metrics must be computed on that seed-node slice only, not the full
-    mini-batch.
 
-    Predictions/labels are pooled across all mini-batches, and Metrics are
-    computed once at the end (not averaged per-batch), so macro-averaged
-    metrics reflect the whole epoch's class balance correctly.
+def train_one_epoch_loader(loader, model, criterion, optimizer, device,
+                           mask_name: str = "train_mask") -> Metrics:
+    """One training epoch over a ``create_dataloaders`` loader. Loss and
+    metrics use the target rows only, pooled over the epoch so macro
+    averages reflect the epoch's class balance.
     """
     model.train()
     total_loss = 0.0
-    total_seeds = 0
+    total_targets = 0
     all_y, all_pred = [], []
 
     for batch in loader:
         batch = batch.to(device)
+        idx = _target_index(batch, mask_name)
         optimizer.zero_grad()
-        out = model(batch.x, batch.edge_index)
-        seed_out = out[:batch.batch_size]
-        seed_y = batch.y[:batch.batch_size]
+        out = model(batch.x, batch.edge_index)[idx]
+        y = batch.y[idx]
 
-        loss = criterion(seed_out, seed_y)
+        loss = criterion(out, y)
         loss.backward()
         optimizer.step()
 
-        total_loss += loss.item() * batch.batch_size
-        total_seeds += batch.batch_size
-        all_y.append(seed_y.detach())
-        all_pred.append(seed_out.argmax(dim=1).detach())
+        total_loss += loss.item() * y.numel()
+        total_targets += y.numel()
+        all_y.append(y.detach())
+        all_pred.append(out.argmax(dim=1).detach())
 
-    y_true = torch.cat(all_y)
-    y_pred = torch.cat(all_pred)
-    return Metrics.compute(y_true, y_pred, total_loss / total_seeds)
+    return Metrics.compute(torch.cat(all_y), torch.cat(all_pred),
+                           total_loss / total_targets)
+
+
+@torch.no_grad()
+def evaluate_loader(loader, model, criterion, device, mask_name: str,
+                    include_auc: bool = False, include_cal: bool = False) -> Metrics:
+    """``evaluate`` over a loader; ``mask_name`` (e.g. "val_mask") only
+    matters for full-graph batches.
+    """
+    model.eval()
+    total_loss = 0.0
+    total_targets = 0
+    all_y, all_pred, all_probs = [], [], []
+
+    for batch in loader:
+        batch = batch.to(device)
+        idx = _target_index(batch, mask_name)
+        out = model(batch.x, batch.edge_index)[idx]
+        y = batch.y[idx]
+
+        total_loss += criterion(out, y).item() * y.numel()
+        total_targets += y.numel()
+        all_y.append(y)
+        all_pred.append(out.argmax(dim=1))
+        if include_auc:
+            all_probs.append(torch.softmax(out, dim=1))
+
+    probs = torch.cat(all_probs) if include_auc else None
+    return Metrics.compute(torch.cat(all_y), torch.cat(all_pred),
+                           total_loss / total_targets, y_proba=probs,
+                           include_auc=include_auc, include_cal=include_cal)
 
 
 def load_checkpoint(model, checkpoint_path, device, state_key="best_model"):
@@ -153,6 +256,3 @@ def load_checkpoint(model, checkpoint_path, device, state_key="best_model"):
     model.to(device)
     model.eval()
     return model
-
-
-

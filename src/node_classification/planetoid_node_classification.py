@@ -3,7 +3,6 @@ import copy
 import argparse
 
 import pandas as pd
-from scipy.stats import t
 import numpy as np
 
 import torch
@@ -11,27 +10,9 @@ from torch.nn import CrossEntropyLoss
 
 from src.common.datasets import load_planetoid
 from src.common.paths import get_project_root
+from src.common.statistical_tests import summarise_metric
 from src.common.utils import evaluate, get_device, train_one_epoch, set_seed
 from src.node_classification.node_models import GCN, GConv, GATV2, GraphSAGE
-
-
-def summarise_metric(values, confidence=0.95):
-    values = np.asarray(values, dtype=float)
-
-    n = len(values)
-    mean = values.mean()
-    std = values.std(ddof=1)
-    se = std / np.sqrt(n)
-
-    t_crit = t.ppf((1 + confidence) / 2, df=n - 1)
-    margin = t_crit * se
-
-    return {
-        "mean": mean,
-        "std": std,
-        "ci_low": mean - margin,
-        "ci_high": mean + margin,
-    }
 
 
 def main(args):

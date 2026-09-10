@@ -10,17 +10,22 @@ recipe (Colab tutorial, ``torch_geometric.nn.models.BasicGNN``) is
 that input dropout, and are identical in eval mode.
 
 Invariants relied on elsewhere (see test/node_models_test.py):
-- all four models expose ``layers`` (ModuleList), ``lin1``, ``encode`` and ``forward``;
+- every model exposes ``layers`` (ModuleList), ``lin1``, ``encode`` and ``forward``;
 - ``encode`` never ends with dropout, so it returns clean embeddings in any mode;
 - ``forward(x, ei) == lin1(encode(x, ei))`` in eval mode.
-Do not change the order in one model without changing all four, otherwise the
+Do not change the order in one model without changing all of them, otherwise the
 model comparison mixes regularisation schemes.
+
+``GraphSAGEBN`` is the same recipe with BatchNorm between conv and activation
+(``dropout -> conv -> norm -> activation``), the OGB example-script layout for
+the larger benchmarks. It also exposes ``norms`` (one per layer), which
+``inference_layerwise`` applies when present.
 """
 import torch.nn as nn
 from torch_geometric.nn import GCNConv,GATv2Conv, SAGEConv, GraphConv, Linear
 
 
-__all__ = ['GCN', 'GConv', 'GATV2', 'GraphSAGE']
+__all__ = ['GCN', 'GConv', 'GATV2', 'GraphSAGE', 'GraphSAGEBN']
 
 
 class GCN(nn.Module):
@@ -206,6 +211,59 @@ class GraphSAGE(nn.Module):
         for layer in self.layers:
             x = self.dropout(x)
             x = layer(x, edge_index)
+            x = self.activation(x)
+        return x
+
+    def forward(self, x, edge_index):
+        x = self.encode(x, edge_index)
+        x = self.dropout(x)
+        x = self.lin1(x)
+        return x
+
+
+class GraphSAGEBN(nn.Module):
+    """GraphSAGE with BatchNorm after every conv, for larger graphs (ogbn-*).
+
+    Per layer: ``dropout -> conv -> norm -> activation``; ``forward`` is
+    ``encode -> dropout -> lin1`` like the other models. BatchNorm uses
+    running statistics in eval mode, so layer-wise inference stays exact.
+    """
+    def __init__(self, num_layers: int, in_feat: int, hid_feat: int,
+                 num_classes: int, dropout: float = 0.3
+                 ):
+        super().__init__()
+
+        if num_layers < 1:
+            raise ValueError("num_layers must be at least 1.")
+
+        self.num_layers = num_layers
+        self.in_channels = in_feat
+        self.out_channels = hid_feat
+        self.num_classes = num_classes
+
+        self.layers = nn.ModuleList()
+        self.norms = nn.ModuleList()
+        for i in range(self.num_layers):
+            hid_in = self.out_channels if i > 0 else self.in_channels
+            self.layers.append(SAGEConv(in_channels=hid_in, out_channels=self.out_channels))
+            self.norms.append(nn.BatchNorm1d(self.out_channels))
+
+        self.lin1 = Linear(in_channels=self.out_channels, out_channels=self.num_classes)
+        self.activation = nn.ReLU()
+        self.dropout = nn.Dropout(p=dropout)
+
+    def reset_parameters(self):
+        for layer, norm in zip(self.layers, self.norms):
+            layer.reset_parameters()
+            norm.reset_parameters()
+        self.lin1.reset_parameters()
+
+    def encode(self, x, edge_index):
+        """Returns learned node embeddings before the classification head."""
+        for layer, norm in zip(self.layers, self.norms):
+            x = self.dropout(x)
+            x = layer(x, edge_index)
+            x = norm(x)
             x = self.activation(x)
         return x
 

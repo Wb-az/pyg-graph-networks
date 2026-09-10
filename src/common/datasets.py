@@ -17,12 +17,13 @@ import warnings
 
 import torch
 from torch_geometric.datasets import Planetoid
+from torch_geometric.utils import is_undirected, to_undirected
 
 
 __all__ = ["load_planetoid", "load_ogb_node"]
 
 
-def load_planetoid(path: str | pathlib, dataset_name: str = "Cora") -> tuple[Planetoid, InMemoryDataset]:
+def load_planetoid(path: str | pathlib.Path, dataset_name: str = "Cora") -> tuple[Planetoid, InMemoryDataset]:
     """
     :param path: Path to the directory where the dataset is stored or will be stored.
     :param dataset_name: Name of the dataset to load (default is "Cora").
@@ -72,7 +73,7 @@ def _configure_ogb_compatibility() -> None:
     )
 
 
-def load_ogb_node(name: str, root: str | pathlib):
+def load_ogb_node(name: str, root: str | pathlib, undirected: bool = True):
     """
     Load and normalize the OGB Node datasets
 
@@ -82,10 +83,13 @@ def load_ogb_node(name: str, root: str | pathlib):
     - Mappings from labels to node indices
 
     The labels are converted to 1-D labels and the indexes to boolean masks, so the dataset
-    follows the same interface used for PyGeometric's datasets.
+    follows the same interface used for PyGeometric's datasets. Directed graphs
+    (ogbn-arxiv) are made undirected, as in the OGB reference scripts.
 
     :param name: A string with the dataset name from the OGB nodes datasets
     :param root: A string or path to the dataset
+    :param undirected: Symmetrise a directed graph (default). Pass False to
+        inspect the raw graph, e.g. the before/after comparison in notebook 03.
     :return: a tuple of (data, dataset)
     """
     _configure_ogb_compatibility()
@@ -95,13 +99,14 @@ def load_ogb_node(name: str, root: str | pathlib):
     dataset = PygNodePropPredDataset(name=name, root=root)
     data = dataset[0]
     data.y = data.y.squeeze(-1)
+    # ogbn-arxiv is a directed citation graph (new -> old). Left as is, 37% of
+    # nodes and 64% of test nodes have no incoming edge and receive no
+    # messages, so the model collapses to an MLP on them. The OGB reference
+    # symmetrises the adjacency; do the same. No-op for undirected datasets.
+    if undirected and not is_undirected(data.edge_index, num_nodes=data.num_nodes):
+        data.edge_index = to_undirected(data.edge_index, num_nodes=data.num_nodes)
     split_idx = dataset.get_idx_split()
     for split, mask in _masks_from_index_split(data.num_nodes, split_idx).items():
         setattr(data, split, mask)
 
     return dataset, data, split_idx
-
-
-
-
-

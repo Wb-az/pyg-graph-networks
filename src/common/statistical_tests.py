@@ -20,8 +20,21 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-__all__ = ["holm_correction", "mcnemar_test", "cochran_q_test", "pairwise_mcnemar",
-           "friedman_test", "kruskal_test", "pairwise_wilcoxon"]
+__all__ = ["summarise_metric", "holm_correction", "mcnemar_test", "cochran_q_test",
+           "pairwise_mcnemar", "friedman_test", "kruskal_test", "pairwise_wilcoxon"]
+
+
+def summarise_metric(values, confidence: float = 0.95) -> dict[str, float]:
+    """Mean, sample std and a t confidence interval of one score over seeds.
+    With five seeds the interval has four degrees of freedom and is wide;
+    read it as descriptive, like the seed-level tests below.
+    """
+    values = np.asarray(values, dtype=float)
+    n = len(values)
+    mean = values.mean()
+    std = values.std(ddof=1)
+    margin = stats.t.ppf((1 + confidence) / 2, df=n - 1) * std / np.sqrt(n)
+    return {"mean": mean, "std": std, "ci_low": mean - margin, "ci_high": mean + margin}
 
 
 def holm_correction(p_values) -> np.ndarray:
