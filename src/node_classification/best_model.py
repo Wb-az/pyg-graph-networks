@@ -42,6 +42,9 @@ def add_selection_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--model", type=str, default=None,
                         choices=list(MODEL_CLASSES),
                         help="Skip selection and use this model instead")
+    parser.add_argument("--loss", type=str, default=None,
+                        help="With --model on OGB runs, which loss variant to use "
+                             "(ogb_run.py tags its outputs <model>_<loss>)")
 
 
 def load_summaries(metrics_dir: Path) -> pd.DataFrame:
@@ -104,7 +107,18 @@ def resolve_model(args, metrics_dir: Path) -> tuple[str, pd.DataFrame]:
     print(table.round(4).to_string())
     if args.model is not None:
         tag = args.model.lower()
-        print(f"\nUsing model override: {args.model}")
+        loss = getattr(args, "loss", None)
+        if loss is not None:
+            tag = f"{tag}_{loss}"
+        if tag not in table.index:
+            # OGB runs are tagged <model>_<loss>; accept a bare model name when
+            # only one loss variant of it was trained.
+            matches = [t for t in table.index if t.split("_")[0] == tag]
+            if len(matches) != 1:
+                raise ValueError(f"No run tagged {tag!r} in {metrics_dir}; candidates: "
+                                 f"{list(table.index)}. Use --loss to pick one.")
+            tag = matches[0]
+        print(f"\nUsing model override: {tag}")
     else:
         print(f"\nBest model by {args.metric}: {tag}")
     return tag, table

@@ -134,3 +134,16 @@ def test_evaluate_accepts_precomputed_logits(graph):
     got = evaluate(graph, model, criterion, graph.test_mask, include_auc=True, out=logits)
     assert got.loss == pytest.approx(ref.loss, rel=1e-5)
     assert got.roc_auc == pytest.approx(ref.roc_auc, rel=1e-5)
+
+
+def test_compute_class_weights_power():
+    from src.common.utils import compute_class_weights
+    y = torch.tensor([0] * 90 + [1] * 9 + [2] * 1)
+    balanced = compute_class_weights(y, num_classes=3)
+    assert torch.allclose(balanced, torch.tensor([100 / 270, 100 / 27, 100 / 3]))
+    tempered = compute_class_weights(y, num_classes=3, power=0.5)
+    counts = torch.tensor([90.0, 9.0, 1.0])
+    # mean weight per sample stays 1, spread shrinks to the square root
+    assert torch.isclose((tempered * counts).sum() / 100, torch.tensor(1.0))
+    assert torch.isclose(tempered[2] / tempered[0], (balanced[2] / balanced[0]) ** 0.5)
+    assert torch.equal(compute_class_weights(y, num_classes=3, power=1.0), balanced)

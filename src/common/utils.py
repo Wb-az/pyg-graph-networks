@@ -26,12 +26,18 @@ def set_seed(seed: int) -> None:
 
 
 def compute_class_weights(y: torch.Tensor, mask: torch.Tensor | None = None,
-                          num_classes: int | None = None) -> torch.Tensor:
+                          num_classes: int | None = None, power: float = 1.0) -> torch.Tensor:
     """
     Inverse-frequency class weights for nn.CrossEntropyLoss(weight=...).
     weight[c] = n_samples / (num_classes * count[c]) -- sklearn's
     "balanced" formula. Pass mask=data.train_mask so validation/test class
     balance never leaks into the training loss.
+
+    ``power`` tempers the weights: weight[c] ** power, rescaled so the mean
+    weight per training sample stays 1. power=1 is the balanced formula,
+    0.5 its square root, 0 no weighting. On ogbn-arxiv the class counts span
+    775x, so balanced weights do too (0.14 to 108) and the model over-predicts
+    rare classes; the square root cuts the spread to 28x.
 
     :param y: Full label tensor (e.g. data.y).
     :param mask: Boolean mask selecting which labels to compute weights
@@ -40,11 +46,16 @@ def compute_class_weights(y: torch.Tensor, mask: torch.Tensor | None = None,
         -- pass it explicitly if a class could be entirely absent from
         `mask` (e.g. a very rare arxiv class), since it can't be inferred
         from labels that never appear.
+    :param power: Exponent applied to the balanced weights (see above).
     """
     labels = y[mask] if mask is not None else y
     num_classes = num_classes or int(labels.max().item()) + 1
     counts = torch.bincount(labels, minlength=num_classes).float().clamp(min=1)
-    return labels.numel() / (num_classes * counts)
+    weights = labels.numel() / (num_classes * counts)
+    if power != 1.0:
+        weights = weights ** power
+        weights = weights * labels.numel() / (counts * weights).sum()
+    return weights
 
 
 def create_dataloaders(data, loader_type: str = "neighbor", batch_size: int = 1024,

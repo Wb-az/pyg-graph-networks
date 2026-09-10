@@ -7,7 +7,6 @@ from sklearn.metrics import (
     accuracy_score,
     average_precision_score,
     balanced_accuracy_score,
-    brier_score_loss,
     f1_score,
     precision_score,
     recall_score,
@@ -78,13 +77,13 @@ class Metrics(NamedTuple):
 
         brier = None
         if y_proba_np is not None:
-            # Use all probability columns so classes absent from this split
-            # are still represented consistently in the multiclass Brier score.
-            brier = brier_score_loss(
-                y_true_np,
-                y_proba_np,
-                labels=list(range(y_proba_np.shape[1])),
-                scale_by_half=True)
+            # Multiclass Brier score: half the mean, over samples, of the summed
+            # squared error against the one-hot label, using every probability
+            # column so classes absent from this split still count. Identical to
+            # scikit-learn's multiclass Brier with scale_by_half=True, computed
+            # here because that signature only exists in scikit-learn >= 1.7.
+            one_hot = np.eye(y_proba_np.shape[1])[y_true_np]
+            brier = float(0.5 * ((y_proba_np - one_hot) ** 2).sum(axis=1).mean())
 
         roc_auc = None
         average_precision: float | None = None

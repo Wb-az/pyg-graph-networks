@@ -3,13 +3,14 @@ import torch
 import torch.nn as nn
 import pytest
 
-from src.node_classification.node_models import GCN, GConv, GATV2, GraphSAGE
+from src.node_classification.node_models import GCN, GConv, GATV2, GraphSAGE, GraphSAGEBN
 
 MODELS = [
     (GCN, {}),
     (GConv, {}),
     (GATV2, {"heads": 2}),
     (GraphSAGE, {}),
+    (GraphSAGEBN, {}),
 ]
 
 
@@ -99,3 +100,27 @@ def test_dropout_active_in_train_mode(cls, extra, graph):
     torch.manual_seed(2)
     out2 = model(x, ei)
     assert not torch.allclose(out1, out2), "dropout should make train outputs differ"
+
+
+def test_sagebn_norm_sits_between_conv_and_activation(graph):
+    """GraphSAGEBN is dropout -> conv -> norm -> activation per layer."""
+    x, ei = graph
+    model = build(GraphSAGEBN, {}).train()
+    assert len(model.norms) == len(model.layers)
+    order = []
+    handles = [
+        model.dropout.register_forward_hook(lambda *_: order.append("dropout")),
+        model.activation.register_forward_hook(lambda *_: order.append("act")),
+        *[layer.register_forward_hook(lambda *_, i=i: order.append(f"conv{i}"))
+          for i, layer in enumerate(model.layers)],
+        *[norm.register_forward_hook(lambda *_, i=i: order.append(f"norm{i}"))
+          for i, norm in enumerate(model.norms)],
+    ]
+    with torch.no_grad():
+        model.encode(x, ei)
+    for h in handles:
+        h.remove()
+    expected = []
+    for i in range(len(model.layers)):
+        expected += ["dropout", f"conv{i}", f"norm{i}", "act"]
+    assert order == expected
