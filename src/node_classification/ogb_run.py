@@ -125,8 +125,10 @@ def main(args):
                 print(f"  seed {int(r['seed']):>6}  acc={r['acc']:.4f}  finished {r['finished']}")
             print(f"  seeds still to train: {[s for s in args.seeds if s not in done_seeds]}")
             print("=" * 100)
-        elif not config_path.exists() and not results_path.exists():
-            print(f"Nothing to resume for {tag}; starting fresh")
+        elif not results_path.exists():
+            # No seed finished (a checkpoint saved mid-seed cannot be continued):
+            # nothing worth keeping, so the leftovers go the way of a fresh run.
+            print(f"Nothing to resume for {tag} ({problem}); starting fresh")
         else:
             # --resume was asked for and cannot be honoured: stop rather than
             # delete the partial seeds. The user drops --resume to start over.
@@ -325,12 +327,13 @@ def resume_problem(config_path, results_path, args):
     """Why the outputs at these paths cannot continue under ``args``; None if they can.
 
     Used by ``main`` for ``--resume`` and by the notebook as a pre-flight check,
-    so a mismatch is visible before anything is deleted.
+    so a mismatch is visible before anything is deleted. A missing results file
+    means no seed finished: the caller may start fresh, there is nothing to keep.
     """
-    if not config_path.exists():
-        return f"{config_path.name} is missing"
     if not results_path.exists():
         return f"{results_path.name} is missing (no seed finished)"
+    if not config_path.exists():
+        return f"{config_path.name} is missing"
     with open(config_path) as f:
         previous = json.load(f)
     status = previous.get("status")
