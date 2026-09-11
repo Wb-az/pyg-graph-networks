@@ -13,12 +13,15 @@ import torch
 
 from src.node_classification.node_models import GCN, GConv, GATV2, GraphSAGE, GraphSAGEBN
 from src.common.utils import load_checkpoint
+from src.common.datasets import load_planetoid, load_ogb_node
 
 MODEL_CLASSES = {"GCN": GCN, "GConv": GConv, "GATV2": GATV2, "SAGE": GraphSAGE,
                  "SAGEBN": GraphSAGEBN}
 
 # Metrics where a smaller value is better.
 LOWER_IS_BETTER = {"loss", "brier", "ece"}
+
+OGB_DATASETS = {"ogbn-arxiv", "ogbn-products"}
 
 CORA_LABELS = {
     0: "Theory",
@@ -32,10 +35,33 @@ CORA_LABELS = {
 LABEL_MAPS = {"Cora": CORA_LABELS}
 
 
+def load_dataset(dataset_name: str, root: Path):
+    """Planetoid or OGB, behind one interface, for the post-training scripts.
+
+    Returns (num_features, num_classes, data). OGB's PygNodePropPredDataset
+    exposes a different API than Planetoid's InMemoryDataset, so both counts
+    are read off `data` itself (x's width, y's max + 1) rather than off the
+    dataset object, uniform for either source.
+    """
+    if dataset_name.lower() in OGB_DATASETS:
+        _, data, _ = load_ogb_node(name=dataset_name.lower(), root=root / "data")
+    else:
+        _, data = load_planetoid(path=root / "data", dataset_name=dataset_name)
+    num_features = data.x.size(-1)
+    num_classes = int(data.y.max().item()) + 1
+    return num_features, num_classes, data
+
+
+def label_map_for(dataset_name: str, num_classes: int) -> dict:
+    """A curated label map (Cora) if one exists, else numeric class names
+    (e.g. ogbn-arxiv's 40 arXiv subject areas have no curated names here)."""
+    return LABEL_MAPS.get(dataset_name, {i: f"class {i}" for i in range(num_classes)})
+
+
 def add_selection_args(parser: argparse.ArgumentParser) -> None:
     """CLI flags shared by the post-training scripts."""
     parser.add_argument("--dataset", type=str, default="Cora",
-                        help="Dataset name: Cora, CiteSeer, PubMed")
+                        help="Dataset name: Cora, CiteSeer, PubMed, ogbn-arxiv, ogbn-products")
     parser.add_argument("--metric", type=str, default="f1",
                         help="Summary metric used to pick the best model "
                              "(f1, balanced_accuracy, acc, roc_auc, loss, ...)")

@@ -7,3 +7,5 @@ __pycache__/
 data/
 outputs/
 checkpoints/
+CLAUDE.md
+.DS_Store

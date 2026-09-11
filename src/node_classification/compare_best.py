@@ -11,8 +11,16 @@ test scores from <model>_results.csv (default metrics: f1, balanced_accuracy).
 
 Usage (from the project root, after training):
     uv run python src/node_classification/compare_best.py --dataset Cora
-Writes test_predictions.csv, comparison_mcnemar.csv, comparison_seeds_<metric>.csv
-to outputs/metrics/<dataset> and a summary to docs/<dataset>_model_comparison.md.
+    uv run python src/node_classification/compare_best.py --dataset ogbn-arxiv \
+        --tags sage_cross_entropy sage_weighted_ce_p0.5 sage_weighted_ce --label sage_losses
+Writes test_predictions[_<label>].csv, comparison_mcnemar[_<label>].csv,
+comparison_seeds_<metric>[_<label>].csv to outputs/metrics/<dataset> and a
+summary to docs/<dataset>_model_comparison[_<label>].md. --tags restricts the
+comparison to the given tags (default: every tag with a summary CSV); the
+OGB grid has architecture and loss variants mixed in one folder, so a
+loss-level comparison (one architecture, several losses) and a model-level
+one (several architectures, one loss each) need --tags to stay meaningful,
+and --label keeps their output files from overwriting each other.
 """
 import argparse
 
@@ -21,11 +29,10 @@ import torch
 from sklearn.metrics import balanced_accuracy_score, f1_score
 
 from src.common.paths import get_project_root
-from src.common.datasets import load_planetoid
 from src.common.utils import get_device
 from src.common import statistical_tests as st
 from src.node_classification.best_model import (load_summaries, select_best_seed,
-                                                load_best_checkpoint)
+                                                load_best_checkpoint, load_dataset)
 
 
 def predict_test_nodes(model, data) -> torch.Tensor:
@@ -65,10 +72,18 @@ def main(args):
     metrics_dir = root / "outputs" / "metrics" / name
     checkpoint_dir = root / "outputs" / "checkpoints" / name
     device = get_device()
+    suffix = f"_{args.label}" if args.label else ""
 
     table = load_summaries(metrics_dir)
-    tags = list(table.index)
-    dataset, data = load_planetoid(path=root / "data", dataset_name=args.dataset)
+    if args.tags:
+        missing = [t for t in args.tags if t not in table.index]
+        if missing:
+            raise ValueError(f"--tags {missing} not found in {metrics_dir}; "
+                             f"available: {list(table.index)}")
+        tags = args.tags
+    else:
+        tags = list(table.index)
+    num_features, num_classes, data = load_dataset(args.dataset, root)
     data = data.to(device)
     y_test = data.y[data.test_mask].cpu()
 
@@ -79,16 +94,16 @@ def main(args):
     for tag in tags:
         seeds[tag] = select_best_seed(metrics_dir, tag)
         model, _ = load_best_checkpoint(checkpoint_dir, args.dataset, tag, seeds[tag],
-                                        dataset.num_features, dataset.num_classes, device)
+                                        num_features, num_classes, device)
         predictions[f"pred_{tag}"] = predict_test_nodes(model, data).numpy()
         predictions[f"correct_{tag}"] = predictions[f"pred_{tag}"] == predictions["true"]
-    predictions.to_csv(metrics_dir / "test_predictions.csv", index=False)
+    predictions.to_csv(metrics_dir / f"test_predictions{suffix}.csv", index=False)
 
     node_scores = node_level_scores(predictions, tags)
     correct = predictions[[f"correct_{t}" for t in tags]].rename(columns=lambda c: c[8:])
     q = st.cochran_q_test(correct.to_numpy())
     mcnemar = st.pairwise_mcnemar(correct, exact=not args.chi2)
-    mcnemar.to_csv(metrics_dir / "comparison_mcnemar.csv", index=False)
+    mcnemar.to_csv(metrics_dir / f"comparison_mcnemar{suffix}.csv", index=False)
 
     print(f"Best seeds: {seeds}")
     print(f"\nTest scores of the best-seed checkpoints ({len(correct)} nodes):")
@@ -105,7 +120,7 @@ def main(args):
         friedman = st.friedman_test(scores)
         kruskal = st.kruskal_test(scores)
         wilcoxon = st.pairwise_wilcoxon(scores)
-        wilcoxon.to_csv(metrics_dir / f"comparison_seeds_{metric}.csv", index=False)
+        wilcoxon.to_csv(metrics_dir / f"comparison_seeds_{metric}{suffix}.csv", index=False)
         print(f"\nSeed-level {metric} ({len(scores)} seeds): "
               f"Friedman p = {friedman['p_value']:.4g}, Kruskal-Wallis p = {kruskal['p_value']:.4g}")
         print(wilcoxon.round(4).to_string(index=False))
@@ -131,7 +146,7 @@ def main(args):
                   markdown_table(scores.reset_index()), "",
                   f"Friedman p = {friedman['p_value']:.4g}; Kruskal-Wallis p = {kruskal['p_value']:.4g}",
                   "", markdown_table(wilcoxon), ""]
-    out = root / "docs" / f"{name}_model_comparison.md"
+    out = root / "docs" / f"{name}_model_comparison{suffix}.md"
     out.parent.mkdir(exist_ok=True)
     out.write_text("\n".join(lines))
     print(f"\nwrote {out.relative_to(root)}")
@@ -139,7 +154,19 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Compare trained node-classification models")
-    parser.add_argument("--dataset", type=str, default="Cora")
+    parser.add_argument("--dataset", type=str, default="Cora",
+                        help="Cora, CiteSeer, PubMed, ogbn-arxiv, ogbn-products")
+    parser.add_argument("--tags", nargs="+", default=None,
+                        help="Restrict the comparison to these tags (default: every tag with "
+                             "a summary CSV). The OGB grid mixes architectures and losses in "
+                             "one folder, e.g. --tags sage_cross_entropy sagebn_cross_entropy "
+                             "gatv2_cross_entropy for a model-level comparison, or "
+                             "--tags sage_cross_entropy sage_weighted_ce_p0.5 sage_weighted_ce "
+                             "for a loss-level one.")
+    parser.add_argument("--label", type=str, default=None,
+                        help="Suffix for output filenames, so different --tags subsets (e.g. "
+                             "a loss-level and a model-level comparison) don't overwrite each "
+                             "other's files.")
     parser.add_argument("--seed_metrics", nargs="+", default=["f1", "balanced_accuracy"],
                         help="Columns of <model>_results.csv to compare across seeds "
                              "(e.g. f1 balanced_accuracy acc roc_auc)")

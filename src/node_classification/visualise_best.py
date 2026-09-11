@@ -2,21 +2,23 @@
 
 Usage (from the project root, after training):
     uv run python src/node_classification/visualise_best.py --dataset Cora --metric f1
-Outputs go to outputs/figures/<dataset> and outputs/metrics/<dataset>.
+    uv run python src/node_classification/visualise_best.py --dataset ogbn-arxiv --model SAGE --loss cross_entropy
+Outputs go to outputs/figures/<dataset> and outputs/metrics/<dataset>. ogbn-arxiv's
+40 classes have no curated names here (see best_model.label_map_for), so the
+embedding plot's legend falls back to "class <i>".
 """
 import argparse
 
 import pandas as pd
 
 from src.common.paths import get_project_root
-from src.common.datasets import load_planetoid
 from src.common.utils import get_device
 from src.common.evaluation_metrics import EmbeddingMetrics
 from src.common.training_visualisations import (plot_metric_curves, compute_embedding,
                                                 plot_embeddings_3d, get_embeddings)
 from src.node_classification.best_model import (add_selection_args, resolve_model,
                                                 select_best_seed, load_best_checkpoint,
-                                                LABEL_MAPS)
+                                                load_dataset, label_map_for)
 
 
 def main(args):
@@ -38,17 +40,17 @@ def main(args):
 
     # Rebuild the model from its checkpoint.
     device = get_device()
-    dataset, data = load_planetoid(path=root / "data", dataset_name=args.dataset)
+    num_features, num_classes, data = load_dataset(args.dataset, root)
     data = data.to(device)
     model, config = load_best_checkpoint(checkpoint_dir, args.dataset, tag, seed,
-                                         dataset.num_features, dataset.num_classes, device)
+                                         num_features, num_classes, device)
     print(f"Loaded {config['model']} checkpoint (hidden={config['hidden_channels']}, "
           f"lr={config['lr']}, dropout={config['dropout']})")
 
     # Embedding projection.
     projection = compute_embedding(model, data.x, data.edge_index,
                                    method=args.embedding, n_components=3)
-    plot_embeddings_3d(projection, data.y, LABEL_MAPS[args.dataset], fig_dir,
+    plot_embeddings_3d(projection, data.y, label_map_for(args.dataset, num_classes), fig_dir,
                        name=f"{tag}_{args.embedding}",
                        title=f"{args.dataset} node embeddings ({config['model']})")
     print(f"Saved {tag}_{args.embedding}_embedding.html/.svg")
