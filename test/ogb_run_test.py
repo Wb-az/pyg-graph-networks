@@ -109,9 +109,14 @@ def test_resume_problem_finished_run(tmp_path):
 
 def test_resume_problem_missing_files(tmp_path):
     config, results = tmp_path / "t_config.json", tmp_path / "t_results.csv"
-    assert "config" in resume_problem(config, results, _args())
+    # no finished seed comes first: with a config but no results there is
+    # nothing to keep, and main() starts fresh instead of refusing
+    assert "no seed finished" in resume_problem(config, results, _args())
     write_run_config(config, _args(), status="running", started=datetime.now())
     assert "no seed finished" in resume_problem(config, results, _args())
+    pd.DataFrame([_row(0, 0.7)]).to_csv(results, index=False)
+    config.unlink()
+    assert "config" in resume_problem(config, results, _args())
 
 
 def test_resume_problem_config_written_by_older_script(tmp_path):
@@ -125,3 +130,15 @@ def test_resume_problem_config_written_by_older_script(tmp_path):
 def test_resumable_config_survives_json_roundtrip():
     cfg = resumable_config(_args())
     assert json.loads(json.dumps(cfg)) == cfg
+
+
+def test_output_tag_h_suffix_only_for_sage_off_256():
+    from src.node_classification.ogb_run import output_tag
+    def tag(model, hidden):
+        return output_tag(_args(f"--dataset ogbn-arxiv --model {model} --num_layers 3 "
+                                f"--hidden_channels {hidden} --no-scheduler --no-dataloader "
+                                f"--loss cross_entropy"))
+    assert tag("SAGE", 256) == "sage_cross_entropy"          # usual width: no suffix
+    assert tag("SAGE", 128) == "sage_cross_entropy_h128"
+    assert tag("SAGEBN", 128) == "sagebn_cross_entropy_h128"
+    assert tag("GATV2", 32) == "gatv2_cross_entropy"          # GATV2 width never suffixed

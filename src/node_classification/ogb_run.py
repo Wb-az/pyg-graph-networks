@@ -271,10 +271,15 @@ def main(args):
 
 
 def output_tag(args) -> str:
-    """<model>_<loss>, plus _p<power> when the class weights are tempered."""
+    """<model>_<loss>, plus _p<power> when weights are tempered, plus _h<width>
+    for SAGE/SAGEBN off their usual 256 (GATV2's width varies by design, per
+    --heads, so it is never suffixed here; a GATV2 width experiment needs its
+    own scheme)."""
     tag = f"{args.model.lower()}_{args.loss}"
     if args.loss != "cross_entropy" and args.weight_power != 1.0:
         tag += f"_p{args.weight_power:g}"
+    if args.model in ("SAGE", "SAGEBN") and args.hidden_channels != 256:
+        tag += f"_h{args.hidden_channels}"
     return tag
 
 
