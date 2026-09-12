@@ -116,6 +116,7 @@ def load_data(dataset: str, root: Path):
 def make_config(params: dict, model: str, loss: str, gamma: float) -> SimpleNamespace:
     """Namespace with the fields build_model / build_criterion read from args."""
     return SimpleNamespace(model=model, loss=loss, gamma=gamma, heads=params.get("heads", 8),
+                           weight_power=1.0,
                            **{k: v for k, v in params.items() if k != "heads"})
 
 
