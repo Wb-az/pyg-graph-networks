@@ -65,32 +65,28 @@ OPTIMIZERS = {"adam": torch.optim.Adam, "adamw": torch.optim.AdamW}
 def suggest_params(trial: optuna.Trial, model: str) -> dict:
     """Search space. Everything here maps onto an ogb_run.py flag.
 
-    num_layers and hidden_channels are fixed, not searched: 2 layers, 256
-    hidden are what the finished SAGE/SAGEBN grid already found best.
-    Narrowed to 4 dimensions (lr, optimizer, dropout, weight_decay) for denser
-    coverage per trial rather than a thin sample of a larger space.
-    weight_decay is on one shared log range: Optuna requires one parameter name
-    to keep the same distribution across every trial in a study, so it can't
-    switch between a fixed 0.0 for Adam and a fixed 0.01 for AdamW depending
-    on the trial's own optimizer choice. The range spans Adam's effective
-    no-decay preference (near the 1e-6 floor, close enough to the 0.0 the
-    finished grid found best) and AdamW's own PyTorch default of 0.01
-    (comfortably inside the range), letting the sampler find what each
-    optimizer actually prefers rather than assuming its stock default.
+    num_layers and hidden_channels are searched, not fixed: an earlier
+    narrower version fixed both at the finished grid's values (2 layers, 256
+    hidden), but a broader search found 3 layers/512 hidden meaningfully
+    better (val_balanced_accuracy 0.5192 vs 0.5014), so capacity matters more
+    than that assumption held. dropout is reduced to 3 values (see below);
+    that narrowing held up and stays. weight_decay is on one shared log
+    range: Optuna requires one parameter name to keep the same distribution
+    across every trial in a study, so it can't switch between a fixed 0.0 for
+    Adam and a fixed 0.01 for AdamW depending on the trial's own optimizer
+    choice. The range spans Adam's effective no-decay preference (near the
+    1e-6 floor) and AdamW's own PyTorch default of 0.01 (comfortably inside
+    the range), letting the sampler find what each optimizer actually prefers.
     """
-    optimizer = trial.suggest_categorical("optimizer", ["adam", "adamw"])
     params = {
-        # Fixed via a single-choice suggest_categorical, not a plain constant,
-        # so they still land in trial.params / study.best_params (read by
-        # ogb_run_command for the reproduce-command printed at the end).
-        "num_layers": trial.suggest_categorical("num_layers", [2]),
-        "hidden_channels": trial.suggest_categorical("hidden_channels", [256]),
+        "num_layers": trial.suggest_int("num_layers", 2, 3),
+        "hidden_channels": trial.suggest_categorical("hidden_channels", [128, 256, 512]),
         # 0.5 is BASE's default (the whole finished SAGE/SAGEBN grid), 0.6 is
         # what GATv2 used, 0.3 is what the early 6.2 diagnostics found helped
         # the dense input features before the grid settled on 0.5.
         "dropout": trial.suggest_categorical("dropout", [0.3, 0.5, 0.6]),
         "lr": trial.suggest_float("lr", 1e-3, 3e-2, log=True),
-        "optimizer": optimizer,
+        "optimizer": trial.suggest_categorical("optimizer", ["adam", "adamw"]),
         "weight_decay": trial.suggest_float("weight_decay", 1e-6, 1e-1, log=True),
     }
     if model == "GATV2":
