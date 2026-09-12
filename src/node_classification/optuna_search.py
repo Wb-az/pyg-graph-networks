@@ -162,12 +162,26 @@ def make_objective(data, num_feat, num_class, device, *, model, loss, gamma, wei
     def objective(trial: optuna.Trial) -> float:
         config = make_config(suggest_params(trial, model), model, loss, gamma, weight_power)
         results = []
-        for i, seed in enumerate(seeds):
-            # Only the first seed reports to the pruner; later seeds are the
-            # confirmation and would confuse the per-step median otherwise.
-            results.append(train_trial(config, data_dev, num_feat, num_class, device, seed,
-                                       epochs, early_stop, metric,
-                                       trial=trial if i == 0 else None))
+        try:
+            for i, seed in enumerate(seeds):
+                # Only the first seed reports to the pruner; later seeds are the
+                # confirmation and would confuse the per-step median otherwise.
+                results.append(train_trial(config, data_dev, num_feat, num_class, device, seed,
+                                           epochs, early_stop, metric,
+                                           trial=trial if i == 0 else None))
+        except torch.cuda.OutOfMemoryError:
+            # A larger num_layers/hidden_channels combo can OOM on this GPU even
+            # though smaller trials fit; pruning (not raising) lets the search
+            # continue past one bad trial instead of losing the whole budget.
+            raise optuna.TrialPruned(f"CUDA OOM with num_layers={config.num_layers} "
+                                     f"hidden_channels={config.hidden_channels}")
+        finally:
+            # Release this trial's cached (but already-freed) blocks before the
+            # next trial, which may pick a very different model size; without
+            # this, the allocator's cache fragments across differently-shaped
+            # trials and can OOM later even with memory nominally available.
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
         for key in ("epoch", "val_loss", "acc", "f1", "balanced_accuracy"):
             trial.set_user_attr(key, float(sum(r[key] for r in results) / len(results)))
         return float(sum(r[metric] for r in results) / len(results))
