@@ -53,7 +53,7 @@ def build_criterion(args, data, num_class, device):
     if args.loss == "weighted_ce":
         return CrossEntropyLoss(weight=weights)
     if args.loss == "focal":
-        from torch_focalloss import MultiClassFocalLoss  # optional dep, only needed here
+        from src.common.losses import MultiClassFocalLoss
         return MultiClassFocalLoss(gamma=args.gamma, weight=weights)
     raise ValueError(f"Invalid loss function: {args.loss}")
 

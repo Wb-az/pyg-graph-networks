@@ -69,22 +69,23 @@ def suggest_params(trial: optuna.Trial, model: str) -> dict:
     narrower version fixed both at the finished grid's values (2 layers, 256
     hidden), but a broader search found 3 layers/512 hidden meaningfully
     better (val_balanced_accuracy 0.5192 vs 0.5014), so capacity matters more
-    than that assumption held. dropout is reduced to 3 values (see below);
-    that narrowing held up and stays. weight_decay is on one shared log
-    range: Optuna requires one parameter name to keep the same distribution
-    across every trial in a study, so it can't switch between a fixed 0.0 for
-    Adam and a fixed 0.01 for AdamW depending on the trial's own optimizer
-    choice. The range spans Adam's effective no-decay preference (near the
-    1e-6 floor) and AdamW's own PyTorch default of 0.01 (comfortably inside
-    the range), letting the sampler find what each optimizer actually prefers.
+    than that assumption held. dropout is back to the full continuous range
+    for the same reason: a reduced 3-value version excluded 0.2, the value
+    the 0.5192 run actually used, and a 30-trial search on an L4 runs in well
+    under an hour, so the coarser 3-value version traded coverage for a
+    density gain that wasn't actually needed. weight_decay is on one shared
+    log range: Optuna requires one parameter name to keep the same
+    distribution across every trial in a study, so it can't switch between a
+    fixed 0.0 for Adam and a fixed 0.01 for AdamW depending on the trial's own
+    optimizer choice. The range spans Adam's effective no-decay preference
+    (near the 1e-6 floor) and AdamW's own PyTorch default of 0.01
+    (comfortably inside the range), letting the sampler find what each
+    optimizer actually prefers.
     """
     params = {
         "num_layers": trial.suggest_int("num_layers", 2, 3),
         "hidden_channels": trial.suggest_categorical("hidden_channels", [128, 256, 512]),
-        # 0.5 is BASE's default (the whole finished SAGE/SAGEBN grid), 0.6 is
-        # what GATv2 used, 0.3 is what the early 6.2 diagnostics found helped
-        # the dense input features before the grid settled on 0.5.
-        "dropout": trial.suggest_categorical("dropout", [0.3, 0.5, 0.6]),
+        "dropout": trial.suggest_float("dropout", 0.1, 0.6, step=0.05),
         "lr": trial.suggest_float("lr", 1e-3, 3e-2, log=True),
         "optimizer": trial.suggest_categorical("optimizer", ["adam", "adamw"]),
         "weight_decay": trial.suggest_float("weight_decay", 1e-6, 1e-1, log=True),
