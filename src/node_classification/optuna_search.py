@@ -81,6 +81,14 @@ def suggest_params(trial: optuna.Trial, model: str) -> dict:
     (near the 1e-6 floor) and AdamW's own PyTorch default of 0.01
     (comfortably inside the range), letting the sampler find what each
     optimizer actually prefers.
+
+    weight_decay is back to the original six-value categorical list (the
+    0.5192 run's own weight_decay=0.0001 came from this list, back when it
+    was the only version that existed). This list is shared across every
+    trial regardless of optimizer, unlike the earlier attempt to switch
+    between a fixed 0.0 for Adam and 0.01 for AdamW per trial, which Optuna
+    rejects (a parameter's distribution can't change within one study); one
+    fixed list used the same way for every trial is fine.
     """
     params = {
         "num_layers": trial.suggest_int("num_layers", 2, 3),
@@ -88,7 +96,8 @@ def suggest_params(trial: optuna.Trial, model: str) -> dict:
         "dropout": trial.suggest_float("dropout", 0.1, 0.6, step=0.05),
         "lr": trial.suggest_float("lr", 1e-3, 3e-2, log=True),
         "optimizer": trial.suggest_categorical("optimizer", ["adam", "adamw"]),
-        "weight_decay": trial.suggest_float("weight_decay", 1e-6, 1e-1, log=True),
+        "weight_decay": trial.suggest_categorical("weight_decay",
+                                                  [0.0, 1e-5, 1e-4, 5e-4, 1e-3, 1e-2]),
     }
     if model == "GATV2":
         params["heads"] = trial.suggest_categorical("heads", [2, 4, 8])
