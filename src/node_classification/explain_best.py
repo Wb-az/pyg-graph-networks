@@ -2,8 +2,14 @@
 
 Usage (from the project root, after training):
     uv run python src/node_classification/explain_best.py --dataset Cora --metric f1
+    uv run python src/node_classification/explain_best.py --dataset ogbn-arxiv --model SAGEBN \
+        --loss cross_entropy --max_samples 100
 Writes per-node metrics, a summary and the aggregate feature importance to
-outputs/metrics/<dataset>, and figures to outputs/figures/<dataset>.
+outputs/metrics/<dataset>, and figures to outputs/figures/<dataset>. On a dataset
+whose test set exceeds MAX_SAMPLES_THRESHOLD, --max_samples must be given
+explicitly: GNNExplainer runs its own --explainer_epochs optimisation per node,
+so explaining every test node (e.g. 48,603 for ogbn-arxiv) by default is
+impractical the way it is for Cora's ~1,000.
 """
 import argparse
 
@@ -11,12 +17,13 @@ import matplotlib
 matplotlib.use("Agg")
 
 from src.common.paths import get_project_root
-from src.common.datasets import load_planetoid
 from src.common.utils import get_device
 from src.common import explainability as xai
 from src.node_classification.best_model import (add_selection_args, resolve_model,
                                                 select_best_seed, load_best_checkpoint,
-                                                LABEL_MAPS)
+                                                load_dataset, label_map_for, figures_dirname)
+
+MAX_SAMPLES_THRESHOLD = 5000
 
 
 def slugify(text: str) -> str:
@@ -28,24 +35,30 @@ def main(args):
     name = args.dataset.lower()
     metrics_dir = root / "outputs" / "metrics" / name
     checkpoint_dir = root / "outputs" / "checkpoints" / name
-    fig_dir = root / "outputs" / "figures" / name
+    fig_dir = root / "outputs" / "figures" / figures_dirname(args.dataset)
     fig_dir.mkdir(parents=True, exist_ok=True)
-    labels = LABEL_MAPS[args.dataset]
 
     tag, _ = resolve_model(args, metrics_dir)
     seed = select_best_seed(metrics_dir, tag)
     print(f"Best seed by validation loss: {seed}\n")
 
     device = get_device()
-    dataset, data = load_planetoid(path=root / "data", dataset_name=args.dataset)
+    num_features, num_classes, data = load_dataset(args.dataset, root)
+    labels = label_map_for(args.dataset, num_classes)
     data = data.to(device)
     model, config = load_best_checkpoint(checkpoint_dir, args.dataset, tag, seed,
-                                         dataset.num_features, dataset.num_classes, device)
+                                         num_features, num_classes, device)
 
-    explainer = xai.create_explainer(model=model, num_features=dataset.num_features,
+    explainer = xai.create_explainer(model=model, num_features=num_features,
                                      method="gnn_explainer", epochs=args.explainer_epochs)
 
     n_test = int(data.test_mask.sum())
+    if args.max_samples is None and n_test > MAX_SAMPLES_THRESHOLD:
+        raise ValueError(
+            f"{args.dataset} has {n_test} test nodes; --max_samples must be set "
+            f"explicitly above {MAX_SAMPLES_THRESHOLD} test nodes, GNNExplainer runs "
+            f"its own {args.explainer_epochs}-epoch optimisation per node, unbounded "
+            "is impractical here. Pass e.g. --max_samples 100.")
     max_samples = n_test if args.max_samples is None else min(args.max_samples, n_test)
     print(f"Explaining {max_samples} of {n_test} test nodes with GNNExplainer "
           f"({args.explainer_epochs} epochs each)...")

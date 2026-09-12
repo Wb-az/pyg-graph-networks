@@ -58,6 +58,19 @@ def label_map_for(dataset_name: str, num_classes: int) -> dict:
     return LABEL_MAPS.get(dataset_name, {i: f"class {i}" for i in range(num_classes)})
 
 
+# outputs/figures/<name>: the EDA notebook (03) already writes ogbn-arxiv's
+# figures under the short name "arxiv"; metrics and checkpoints keep the full
+# dataset name (outputs/metrics/ogbn-arxiv, .../checkpoints/ogbn-arxiv), only
+# the figures folder needs to match the EDA notebook's existing convention.
+FIGURES_DIRNAME = {"ogbn-arxiv": "arxiv", "ogbn-products": "products"}
+
+
+def figures_dirname(dataset_name: str) -> str:
+    """Figures subfolder for a dataset: the EDA notebook's short name for OGB
+    datasets, otherwise the same as metrics/checkpoints (dataset_name.lower())."""
+    return FIGURES_DIRNAME.get(dataset_name.lower(), dataset_name.lower())
+
+
 def add_selection_args(parser: argparse.ArgumentParser) -> None:
     """CLI flags shared by the post-training scripts."""
     parser.add_argument("--dataset", type=str, default="Cora",

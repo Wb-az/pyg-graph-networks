@@ -18,7 +18,7 @@ from src.common.training_visualisations import (plot_metric_curves, compute_embe
                                                 plot_embeddings_3d, get_embeddings)
 from src.node_classification.best_model import (add_selection_args, resolve_model,
                                                 select_best_seed, load_best_checkpoint,
-                                                load_dataset, label_map_for)
+                                                load_dataset, label_map_for, figures_dirname)
 
 
 def main(args):
@@ -26,7 +26,7 @@ def main(args):
     name = args.dataset.lower()
     metrics_dir = root / "outputs" / "metrics" / name
     checkpoint_dir = root / "outputs" / "checkpoints" / name
-    fig_dir = root / "outputs" / "figures" / name
+    fig_dir = root / "outputs" / "figures" / figures_dirname(args.dataset)
     fig_dir.mkdir(parents=True, exist_ok=True)
 
     tag, _ = resolve_model(args, metrics_dir)

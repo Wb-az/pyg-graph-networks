@@ -18,7 +18,6 @@ import pandas as pd
 import torch
 from torch.nn import CrossEntropyLoss
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-from torch_focalloss import MultiClassFocalLoss
 
 from src.common.datasets import load_ogb_node
 from src.common.paths import get_project_root
@@ -54,6 +53,7 @@ def build_criterion(args, data, num_class, device):
     if args.loss == "weighted_ce":
         return CrossEntropyLoss(weight=weights)
     if args.loss == "focal":
+        from torch_focalloss import MultiClassFocalLoss  # optional dep, only needed here
         return MultiClassFocalLoss(gamma=args.gamma, weight=weights)
     raise ValueError(f"Invalid loss function: {args.loss}")
 
