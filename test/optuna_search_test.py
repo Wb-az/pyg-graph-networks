@@ -46,6 +46,15 @@ def test_two_seeds_average(graph, tmp_path):
     assert len(study.trials) == 1
 
 
+@pytest.mark.parametrize("loss", ["weighted_ce", "focal"])
+def test_non_cross_entropy_loss_runs(graph, tmp_path, loss):
+    """Regression guard: build_criterion reads args.weight_power unconditionally
+    for any non-cross_entropy loss, so make_config must always set it."""
+    study = run_study(dataset="synthetic", model="SAGE", n_trials=1, epochs=2,
+                      loss=loss, persist=False, prune=False, data=graph, root=tmp_path)
+    assert study.best_trial.value is not None
+
+
 def test_loss_metric_is_minimised(graph, tmp_path):
     study = run_study(dataset="synthetic", model="SAGE", n_trials=2, epochs=2, metric="loss",
                       persist=False, prune=False, data=graph, root=tmp_path)
