@@ -113,10 +113,11 @@ def load_data(dataset: str, root: Path):
     return data, ds.num_node_features, ds.num_classes
 
 
-def make_config(params: dict, model: str, loss: str, gamma: float) -> SimpleNamespace:
+def make_config(params: dict, model: str, loss: str, gamma: float,
+               weight_power: float = 1.0) -> SimpleNamespace:
     """Namespace with the fields build_model / build_criterion read from args."""
     return SimpleNamespace(model=model, loss=loss, gamma=gamma, heads=params.get("heads", 8),
-                           weight_power=1.0,
+                           weight_power=weight_power,
                            **{k: v for k, v in params.items() if k != "heads"})
 
 
@@ -154,12 +155,12 @@ def train_trial(config, data_dev, num_feat, num_class, device, seed: int,
     return best
 
 
-def make_objective(data, num_feat, num_class, device, *, model, loss, gamma, seeds,
+def make_objective(data, num_feat, num_class, device, *, model, loss, gamma, weight_power, seeds,
                    epochs, early_stop, metric):
     data_dev = copy.copy(data).to(device)
 
     def objective(trial: optuna.Trial) -> float:
-        config = make_config(suggest_params(trial, model), model, loss, gamma)
+        config = make_config(suggest_params(trial, model), model, loss, gamma, weight_power)
         results = []
         for i, seed in enumerate(seeds):
             # Only the first seed reports to the pruner; later seeds are the
@@ -174,7 +175,8 @@ def make_objective(data, num_feat, num_class, device, *, model, loss, gamma, see
     return objective
 
 
-def ogb_run_command(params: dict, dataset: str, model: str, loss: str, gamma: float) -> str:
+def ogb_run_command(params: dict, dataset: str, model: str, loss: str, gamma: float,
+                    weight_power: float = 1.0) -> str:
     """The ogb_run.py invocation that reproduces a set of parameters."""
     flags = [f"--dataset {dataset}", f"--model {model}", f"--loss {loss}",
              f"--num_layers {params['num_layers']}",
@@ -186,12 +188,15 @@ def ogb_run_command(params: dict, dataset: str, model: str, loss: str, gamma: fl
         flags.append(f"--heads {params['heads']}")
     if loss == "focal":
         flags.append(f"--gamma {gamma}")
+    if loss != "cross_entropy" and weight_power != 1.0:
+        flags.append(f"--weight_power {weight_power:g}")
     return "uv run python -m src.node_classification.ogb_run " + " ".join(flags)
 
 
 def run_study(dataset: str = "ogbn-arxiv", model: str = "SAGE", n_trials: int = 30,
               seeds=(0,), epochs: int = 300, early_stop: int = 30, metric: str = "f1",
-              loss: str = "cross_entropy", gamma: float = 2.0, timeout: float | None = None,
+              loss: str = "cross_entropy", gamma: float = 2.0, weight_power: float = 1.0,
+              timeout: float | None = None,
               study_name: str | None = None, persist: bool = True, resume: bool = True,
               prune: bool = True, data=None, root: Path | None = None,
               show_progress_bar: bool = False) -> optuna.Study:
@@ -201,6 +206,10 @@ def run_study(dataset: str = "ogbn-arxiv", model: str = "SAGE", n_trials: int = 
         configurations; confirm the winner with the full seed list in ogb_run.
     :param metric: Validation metric to optimise; ``loss`` is minimised, the
         others maximised. Always read at the epoch of lowest validation loss.
+    :param weight_power: Fixed tempering exponent for weighted_ce/focal class
+        weights (not searched by ``suggest_params``); pass e.g. 0.5 to search
+        architecture/optimizer choices around an already-tempered weighting
+        instead of the untempered default.
     :param persist: Store the study in ``outputs/optuna/<study_name>.db``.
         False keeps it in memory (tests, throwaway runs).
     :param data: Preloaded graph, to skip the load in a notebook session.
@@ -238,14 +247,14 @@ def run_study(dataset: str = "ogbn-arxiv", model: str = "SAGE", n_trials: int = 
     start = time.time()
     study.optimize(
         make_objective(data, num_feat, num_class, device, model=model, loss=loss,
-                       gamma=gamma, seeds=tuple(seeds), epochs=epochs,
-                       early_stop=early_stop, metric=metric),
+                       gamma=gamma, weight_power=weight_power, seeds=tuple(seeds),
+                       epochs=epochs, early_stop=early_stop, metric=metric),
         n_trials=n_trials, timeout=timeout, show_progress_bar=show_progress_bar,
         gc_after_trial=True)
     elapsed = (time.time() - start) / 60
 
     best = study.best_trial
-    command = ogb_run_command(best.params, dataset, model, loss, gamma)
+    command = ogb_run_command(best.params, dataset, model, loss, gamma, weight_power)
     print(f"\nBest of {len(study.trials)} trials ({elapsed:.1f} min): "
           f"val_{metric}={best.value:.4f} at epoch {best.user_attrs.get('epoch', 0):.0f}")
     for key, value in best.params.items():
@@ -279,6 +288,9 @@ def main(argv=None):
     parser.add_argument("--loss", choices=["cross_entropy", "weighted_ce", "focal"],
                         default="cross_entropy")
     parser.add_argument("--gamma", type=float, default=2.0, help="focal loss exponent")
+    parser.add_argument("--weight_power", type=float, default=1.0,
+                        help="fixed tempering exponent for weighted_ce/focal class weights "
+                             "(not searched); e.g. 0.5 to search around tempered weighting")
     parser.add_argument("--study_name", default=None,
                         help="default <dataset>_<model>_<loss>_<metric>")
     parser.add_argument("--resume", action=argparse.BooleanOptionalAction, default=True,
@@ -288,7 +300,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     run_study(dataset=args.dataset, model=args.model, n_trials=args.n_trials,
               seeds=tuple(args.seeds), epochs=args.epochs, early_stop=args.early_stop,
-              metric=args.metric, loss=args.loss, gamma=args.gamma, timeout=args.timeout,
+              metric=args.metric, loss=args.loss, gamma=args.gamma,
+              weight_power=args.weight_power, timeout=args.timeout,
               study_name=args.study_name, resume=args.resume, prune=args.prune)
 
 
