@@ -113,7 +113,7 @@ used there against 0.5 on Cora.
 | Training | full batch | full batch (`--no-dataloader`); NeighborLoader available for ogbn-products |
 | Width | per model (Cora tables) | 256 hidden for every model; GATv2 8 heads × 32 (8 × 16 on a T4) |
 | Epoch budget | 200 | 500 (one gradient step per epoch) |
-| Early stopping | 12 epochs on validation loss | 50 epochs on validation loss |
+| Early stopping | 12 epochs on validation loss | disabled for the baseline grid (`--early_stop 501`, full 500-epoch budget); architecture- and search-specific exceptions noted in 6.1/6.5 |
 | LR schedule | none | none (`--no-scheduler`, constant lr 0.01 as in the OGB reference); the first A1 pass used ReduceLROnPlateau on macro F1 |
 | Model selection | epoch of lowest validation loss, checkpoint reloaded for test | same |
 | Seeds | 0 to 4 | 0 to 4, 20, 42, 123, 1234, 12345 |
@@ -211,12 +211,15 @@ finished differs from it in two ways worth stating up front, since later
 subsections report the finished numbers, not this plan. First, every SAGE
 and SAGEBN tag ended up trained at `weight_decay=0`: a `weight_decay=5e-4`
 pilot (6.2, 6.3) gave comparable results, and the zero-decay runs
-superseded it as the tags actually kept. Second, GATv2's hyperparameters
-were tuned separately rather than held to the shared baseline: `lr=0.001`,
-`dropout=0.6` (baseline: `lr=0.01`, `dropout=0.5`), chosen from published
-attention-network configurations rather than the SAGE/SAGEBN sweep, so
-GATv2 is not a controlled ablation of the other two, only width and heads
-were meant to be its sole difference at the planning stage.
+superseded it as the tags actually kept. Second, the initial GATv2
+configuration used architecture-specific hyperparameters rather than the
+shared baseline: `lr=0.001`, `dropout=0.6` (baseline: `lr=0.01`,
+`dropout=0.5`), chosen from published attention-network configurations
+rather than the SAGE/SAGEBN sweep, so GATv2 is not a controlled ablation of
+the other two, only width and heads were meant to be its sole difference
+at the planning stage. This initial configuration was subsequently found
+to be undertrained (below), and is distinct from the later Optuna-tuned
+configuration in 6.5.
 
 Ten seeds each, identical flags apart from the variable under study.
 Baseline flags follow the OGB reference for ogbn-arxiv: 3 layers, 256
@@ -492,8 +495,11 @@ re-confirmed with the fix in place.
 
 **Takeaways**
 - Tuning helps CE a lot (+1.6 acc / +3.0 balanced-acc points on SAGEBN, and
-  a further balanced-accuracy gain still unconfirmed on GATv2); it barely
-  moves weighted CE (+0.5 acc / +0.9 balanced-acc), so the search space was
+  +0.5 acc / +3.4 balanced-acc on GATv2, confirmed over ten seeds; only the
+  statistical comparison and checkpoint artefact for these two still need
+  reconfirming, not the performance numbers themselves, see the notes
+  above); it barely moves weighted CE (+0.5 acc / +0.9 balanced-acc), so the
+  search space was
   probably already close to optimal there. A wider grid might find more but
   wasn't worth the compute given the small expected gain.
 - **Tempering matters more than tuning does.** Untempered weighted CE buys
@@ -571,38 +577,15 @@ GATv2 on an A100 (its wider attention tensors needed the extra memory, see
 
 ## 8. Open items
 
-- `compare_best.py` and `visualise_best.py` now
-  dispatch to `load_ogb_node` for OGB datasets (`best_model.load_dataset`),
-  and `compare_best.py` takes `--tags` (which tags to compare) and `--label`
-  (output filename suffix), used for the 6.3/6.4 loss-level and
-  model-level comparisons.
 - Eval-mode train accuracy in the training log (currently measured with
   dropout active, which understates it).
 - ogbn-products with the NeighborLoader and layer-wise inference, once the
   arxiv protocol is settled.
 - Custom circuit dataset: graph construction and the two prediction tasks.
-- The `readme.md` tree predates the current layout and should be regenerated.
-- **Temporal / inductive framing of ogbn-arxiv.** The standard split (train on
-  papers through 2017, validate on 2018, test from 2019) is transductive, not
-  inductive: `load_ogb_node` loads one static graph, and full-batch training
-  passes messages over the whole citation network, test-year edges and
-  features included, on every forward pass. Only the loss is time-restricted.
-  A genuinely inductive setup would train on the train-year subgraph only,
-  then add the validation-year and finally the test-year nodes and edges
-  incrementally, classifying each using only the graph as it existed before
-  that node arrived, closer to GraphSAGE's original inductive framing than to
-  how it's used here. That needs temporal graph snapshots `load_ogb_node`
-  doesn't build, and points toward dynamic/temporal GNN architectures
-  (EvolveGCN, DySAT, Temporal Graph Networks) rather than a config change to
-  the current models. `GraphSAGEBN` in the current grid is a step in that
-  direction already: BatchNorm between layers helps stabilise training under
-  the feature-distribution drift across publication years that an
-  incremental curriculum would make explicit, even though today's grid
-  trains on one static snapshot. Not started; would need a new data pipeline
-  before any model change. For scale, the OGB leaderboard's current top
-  entry, SimTeG+TAPE+RevGAT (uses external data, LLM-derived text features),
-  reports validation accuracy 0.7846 ± 0.0004 and test accuracy 0.7803 ± 0.0007
-  on the standard transductive split; this project's grid uses no external
-  data and is not aiming to compete with that number, it's a reference point
-  for where full-batch GraphSAGE/GATv2 with class-weighted losses sit in the
-  field.
+**Temporal / inductive framing of ogbn-arxiv.** The standard split (train on papers through 2017, validate on 2018, test from 2019) is transductive, not inductive: `load_ogb_node` loads one static graph, and full-batch training passes messages over the whole citation network, including test-year edges and features, on every forward pass. Only the loss is time-restricted.
+
+A genuinely inductive setup would train on the train-year subgraph only, then introduce validation-year and test-year nodes and edges incrementally, classifying each using only the graph information available at that point. This is closer to GraphSAGE's original inductive framing than the setup used here. It would require temporal graph snapshots that `load_ogb_node` does not currently build, and would potentially motivate dynamic or temporal GNN architectures such as EvolveGCN, DySAT or Temporal Graph Networks rather than a configuration change to the existing models.
+
+GraphSAGE-BN performs substantially better than plain GraphSAGE in the current transductive experiments, showing that BatchNorm is useful for optimisation in this setting. Whether that benefit would also improve robustness to temporal feature-distribution shift in a genuinely inductive experiment has not been tested and would require a separate temporal evaluation pipeline.
+
+For scale, the OGB leaderboard's current top entry, SimTeG+TAPE+RevGAT, uses external data and LLM-derived text features and reports validation accuracy of 0.7846 ± 0.0004 and test accuracy of 0.7803 ± 0.0007 on the standard transductive split. This project's experiments use no external data and are not intended to compete directly with that result; the leaderboard value is included as context for where full-batch GraphSAGE and GATv2 with class-weighted losses sit relative to more heavily engineered approaches.
