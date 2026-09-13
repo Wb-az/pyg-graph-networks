@@ -1,10 +1,5 @@
 # Graph neural networks for node classification: methodology and results
 
-Living document. Sections marked **TODO** are placeholders that fill in as
-experiments finish. Figures live under `docs/figures/<dataset>/`; copy them
-from the git-ignored `outputs/figures/<dataset>/` when a result is final
-(`cp outputs/figures/cora/gatv2_training_curve.svg docs/figures/cora/`).
-
 Repository: https://github.com/Wb-az/pyg-graph-networks
 
 ---
@@ -15,9 +10,11 @@ The project compares four message-passing architectures on node
 classification, first on a small citation graph (Cora) where every design
 choice can be checked cheaply, then on a graph two orders of magnitude larger
 (ogbn-arxiv) where memory, class imbalance and training budget start to
-matter. The same models, training loop, selection rule and statistical
-comparison are used on both, so differences in the results come from the
-data, not from the pipeline.
+matter. The same core training, checkpoint-selection and evaluation
+framework is used across datasets, with scale- and architecture-specific
+settings (documented explicitly where they apply, e.g. GATv2's epoch
+budget and SAGEBN as an arxiv-only variant) rather than one fixed
+configuration everywhere.
 
 | Stage | Dataset | Status |
 |---|---|---|
@@ -28,8 +25,8 @@ data, not from the pipeline.
 | Node classification, GraphSAGE, 3 losses | ogbn-arxiv | done, section 6.1, 6.3 |
 | BatchNorm and GATv2 variants | ogbn-arxiv | done, section 6.1, 6.4 |
 | Statistical model comparison | ogbn-arxiv | done, `docs/ogbn-arxiv_model_comparison_*.md` |
-| Hyperparameter search (Optuna) | ogbn-arxiv | script ready, runs pending, section 6.5 |
-| Graph classification, link prediction | custom | **TODO**, stubs only |
+| Hyperparameter search (Optuna) | ogbn-arxiv | done, section 6.5 |
+<!-- | Graph classification, link prediction | custom | **TODO**, stubs only | -->
 
 ---
 
@@ -48,10 +45,8 @@ Cora's features are wide and sparse, so the first layer acts as a
 compressor and small hidden sizes (16 to 128) are enough. With 140 labelled
 nodes, regularisation dominates every design decision.
 
-*Figure placeholders*
-
-- `![Cora class distribution per split](/Users/az-asc/PycharmProjects/GraphNetworks/outputs/figures/cora/data_dist.svg)` **TODO copy**
-- `![Cora graph, ForceAtlas2 layout](figures/cora/cora_graph_atlas2.svg)` **TODO copy**
+![Cora class distribution per split](figures/cora/data_dist.svg)
+![Cora graph, ForceAtlas2 layout](figures/cora/cora_graph_atlas2.svg)
 
 ### 2.2 ogbn-arxiv
 
@@ -73,17 +68,15 @@ Two properties drive the methodology on this graph:
   F1 is the headline metric, and class-weighted and focal losses are
   compared against plain cross entropy.
 
-*Figure placeholders*
+![arxiv class distribution per split](figures/arxiv/data_dist.svg)
+![arxiv graph sample, ForceAtlas2](figures/arxiv/ogbnarx_graph_atlas2.svg)
 
-- `![arxiv class distribution per split](figures/arxiv/data_dist.svg)` **TODO copy**
-- `![arxiv graph sample, ForceAtlas2](figures/arxiv/ogbnarx_graph_atlas2.svg)` **TODO copy**
-
-### 2.3 Custom dataset (electronic circuits)
+<!-- ### 2.3 Custom dataset (electronic circuits)
 
 Kaggle circuit-step data (`notebooks/04_eda_custom_dataset.ipynb`): one
 graph per circuit, components as nodes. Intended tasks are next-component
 prediction (graph classification) and missing-link prediction. **TODO**:
-graph construction, splits, baselines.
+graph construction, splits, baselines. -->
 
 ---
 
@@ -202,14 +195,10 @@ the explanation subgraph flips the prediction for 40 % of nodes; keeping only
 the explanation never does. Explanations are sufficient more often than
 they are necessary.
 
-*Figure placeholders*
-
-- `![GATv2 training curves, all seeds](figures/cora/gatv2_training_curve.svg)` **TODO copy**
-- `![GATv2 t-SNE of encode embeddings](figures/cora/gatv2_tsne_embedding.svg)` **TODO copy**
-- `![GATv2 aggregate feature importance](figures/cora/gatv2_xai_aggregate_importance.svg)` **TODO copy**
-- `![Explanation subgraph, high-confidence correct node](figures/cora/gatv2_xai_high_confidence_correct_node2220_subgraph.png)` **TODO copy**
-- **TODO** per-seed accuracy strip plot across models (from `*_results.csv`)
-- **TODO** McNemar contingency heatmap (from `comparison_mcnemar.csv`)
+![GATv2 training curves, all seeds](figures/cora/gatv2_training_curve.svg)
+![GATv2 t-SNE of encode embeddings](figures/cora/gatv2_tsne_embedding.svg)
+![GATv2 aggregate feature importance](figures/cora/gatv2_xai_aggregate_importance.svg)
+![Explanation subgraph, high-confidence correct node](figures/cora/gatv2_xai_high_confidence_correct_node2220_subgraph.png)
 
 ---
 
@@ -242,11 +231,11 @@ undirected graph.
 | A2 | GraphSAGE | weighted CE, untempered | 256 | 0 | done |
 | A2b | GraphSAGE | weighted CE, tempered (p = 0.5) | 256 | 0 | done |
 | A3 | GraphSAGE | focal | – | – | dropped after pilot (6.3) |
-| B | GATv2 (8 heads × 32) | CE, tempered weighted CE | 256 (32/head) | 5e-4 | done, `lr=0.001` `dropout=0.6`, not fully converged (6.4) |
+| B | GATv2 (8 heads × 32) | CE, tempered weighted CE | 256 (32/head) | 5e-4 | CE corrected via a supplementary 800-epoch run (note below); weighted CE untested at the longer budget |
 | C | GraphSAGE-BN | CE, tempered weighted CE | 256 | 0 | done |
 | E1 | GraphSAGE | cross entropy (width ablation) | 128 | 0 | done |
 | E2 | GraphSAGE-BN | cross entropy (width ablation) | 128 | 0 | done |
-| D | Optuna on best model | best loss from A | – | – | not started (6.5) |
+| D | Optuna on best model | best loss from A | – | – | done (6.5) |
 
 GCN and GConv were dropped from the arxiv grid in September 2026 to fit the
 compute budget; B and C run under all three losses rather than waiting for
@@ -276,19 +265,46 @@ when one loss variant exists, `--loss` picks among several.
 | sagebn_cross_entropy | 0.7014 | 0.4734 | 0.4661 | 0.0324 | 0.9753 |
 | sagebn_weighted_ce_p0.5 | 0.6795 | 0.4961 | 0.5278 | 0.0257 | 1.2252 |
 | sagebn_cross_entropy_h128 | 0.7007 | 0.4636 | 0.4580 | 0.0365 | 0.9761 |
-| gatv2_cross_entropy | 0.6340 | 0.2621 | 0.2691 | 0.0860 | 1.3044 |
+| gatv2_cross_entropy* | 0.7112 | 0.4736 | 0.4598 | 0.0271 | 0.9367 |
 | gatv2_weighted_ce_p0.5 | 0.6454 | 0.3691 | 0.3714 | 0.1929 | 1.6265 |
+
+*`gatv2_cross_entropy`'s original result under the grid's shared 500-epoch
+budget was undertrained: its training curve was still improving with no
+plateau when training stopped, unlike SAGE/SAGEBN, which had converged by
+then. This is plausible since GATv2's attention heads make each layer
+considerably more expensive to fit than SAGE/SAGEBN's simpler aggregation,
+even at a comparable total hidden width. A supplementary run with a longer
+budget (800 epochs instead of 500) and a higher learning rate (0.005,
+chosen to make convergence tractable in that budget; a lower lr such as
+0.001 would likely need well beyond 800 epochs) confirmed this. Accuracy
+rose from 0.634 to 0.711, a swing far larger than normal seed-to-seed
+noise, and even then some seeds' best epoch landed near the tail of the
+budget (seed 12345 at epoch 765 of 800). The row above reports this
+corrected result in place of the original undertrained one; `dropout` was
+also lowered from 0.6 to 0.3 for this run. `gatv2_weighted_ce_p0.5` likely
+has the same convergence issue but has not yet been re-run to confirm it.
+Reproduce this corrected run from the command line (ten seeds, full batch):
+
+```
+uv run python -m src.node_classification.ogb_run --dataset ogbn-arxiv \
+    --model GATV2 --loss cross_entropy --num_layers 3 --hidden_channels 32 \
+    --heads 8 --dropout 0.3 --lr 0.005 --weight_decay 0.0005 --optimizer adamw \
+    --epochs 800 --early_stop 501 --no-scheduler --no-dataloader --log_steps 50
+```
 
 Balanced accuracy, not accuracy, is the metric that matters for choosing
 among these: ogbn-arxiv's 40 classes are heavily imbalanced (train split
 21 to 16,284 nodes per class, 775×), so a model can post a respectable
 accuracy while doing badly on most of the class space. `sagebn_cross_entropy`
-sits at accuracy 0.7014 with only 0.4661 balanced accuracy, close to
-Node2vec's 0.7007 on the OGB leaderboard (rank 70/74, a shallow random-walk
-embedding with no message passing), while every proper GNN entry above it
-outperforms this project's unweighted baselines on accuracy. Unweighted
-training here is not using the graph's signal much better than a decade-old
-embedding method once class imbalance is accounted for; see 6.3.
+sits at accuracy 0.7014, close to Node2vec's 0.7007 on the OGB leaderboard
+(rank 70/74, a shallow random-walk embedding with no message passing),
+while every proper GNN entry above it outperforms this project's unweighted
+baselines on accuracy. That its balanced accuracy is only 0.4661 is this
+project's own finding, not a claim about Node2vec: the leaderboard doesn't
+report a like-for-like balanced accuracy or macro F1 for Node2vec, so
+whether it is similarly weak under class imbalance is unknown, only the
+raw-accuracy proximity is established here. See 6.3 for the balanced-accuracy
+comparison across this project's own models.
 
 ### 6.2 Findings so far (single-seed diagnostics, validation split)
 
@@ -331,7 +347,7 @@ MPS, so it was dropped from the grid. Weighted CE already carries the
 imbalance question at no extra cost. Focal remains future work, ideally on
 a CUDA machine where the slowdown may not apply.
 
-**Full run, first seed (10 September 2026, afternoon).** The pilot's lead
+**Full run, first seed.** The pilot's lead
 does not survive 500 epochs. SAGE at 256 with balanced weighted CE, seed 0,
 epoch 370 on the Mac: validation accuracy 0.590, macro F1 0.442, against
 A1's ten-seed average of 0.680 and 0.421 at the end of training. Nine
@@ -368,18 +384,30 @@ every pairwise Wilcoxon significant after Holm correction.
 
 **Architecture, cross entropy only** (`compare_best.py --dataset ogbn-arxiv
 --tags sage_cross_entropy sagebn_cross_entropy gatv2_cross_entropy --label
-architectures`, full output in `docs/ogbn-arxiv_model_comparison_architectures.md`).
-Node-level: Cochran's Q = 1975.3 (df 2, p < 0.001); every pairwise McNemar
-significant after Holm correction. Seed-level: Friedman p < 0.001 for macro
-F1 and balanced accuracy; every pairwise Wilcoxon significant. SAGEBN beats
-plain SAGE at every matched comparison in 6.1's table (CE at 256: 0.4661 vs
-0.3314 balanced accuracy; CE at 128: 0.4580 vs 0.2861; tempered weighted at
-256: 0.5278 vs 0.4254), so BatchNorm is doing real work here, not just
-stabilising optimisation. GATv2 trails both SAGE variants at both losses,
-but see 6.1's caveat: its hyperparameters were tuned separately and its
-best epochs sit at 495-498 of the 500-epoch budget (seed 12345, cross
-entropy), so validation loss had not fully plateaued; some of the gap may
-be under-training rather than a real architectural disadvantage.
+architectures`, full output in `docs/ogbn-arxiv_model_comparison_architectures.md`;
+`gatv2_cross_entropy` uses the corrected, longer-trained result from 6.1's
+note, not the original undertrained one). Node-level: Cochran's Q = 1502.4
+(df 2, p < 0.001); every pairwise McNemar significant after Holm correction,
+including SAGEBN vs GATv2 (p_holm < 0.001), though at this sample size
+(48,603 paired test nodes) even a small, consistent edge reaches
+significance. Seed-level: Friedman p < 0.001 for macro F1 and balanced
+accuracy, but the SAGEBN vs GATv2 pairwise Wilcoxon tells a different story
+from the node-level test: not significant for macro F1 (p_holm = 0.695,
+means 0.4734 vs 0.4736, effectively tied) and only marginally significant
+for balanced accuracy (p_holm = 0.049, means 0.4661 vs 0.4598, SAGEBN
+ahead). SAGE stays clearly behind both SAGEBN and GATv2 at every test
+(p_holm <= 0.006 throughout).
+
+With GATv2 properly converged (6.1), it is no longer the weakest
+architecture. At the best-seed level it edges ahead of SAGEBN on accuracy
+(0.7117 vs 0.7051), macro F1 (0.4803 vs 0.4705) and balanced accuracy
+(0.4677 vs 0.4653), while the seed-level tests say the two are statistically
+indistinguishable on F1 and SAGEBN holds a small, marginally significant
+edge on balanced accuracy. SAGEBN still clearly beats plain SAGE at every
+matched comparison in 6.1's table (CE at 256: 0.4661 vs 0.3314 balanced
+accuracy; CE at 128: 0.4580 vs 0.2861; tempered weighted at 256: 0.5278 vs
+0.4254), so BatchNorm is doing real work; GATv2, once given enough training,
+closes most of the gap that looked architectural before.
 
 **GraphSAGE vs GraphSAGE-BN, the normalisation question.**
 `sagebn_weighted_ce_p0.5` (tempered weighting + BatchNorm) reaches balanced
@@ -401,24 +429,87 @@ and `..._tsne_embedding.{html,svg}`; not yet copied to `docs/figures/`.
 
 ### 6.5 Hyperparameter search
 
-**Not started.** `src/node_classification/optuna_search.py` already exists
-for this (`uv run python -m src.node_classification.optuna_search --dataset
-ogbn-arxiv --model SAGE --n_trials 30`); GATv2's lr/dropout/width were
-tuned by hand instead against published attention-network configurations
-(6.1), which is exactly the kind of manual search this script should
-replace. Before running it for GATv2, confirm `suggest_params` and its
-`--heads` handling cover that model, it was written with SAGE in mind.
-**TODO**: best configuration per model, its confirmation over ten seeds,
-and Optuna parameter-importance and optimisation-history plots.
+30-trial TPE search, winner confirmed over all ten seeds with `ogb_run.py`
+(search space per 4.4), run on SAGEBN and, later, on GATv2 once it needed
+its own longer epoch budget to converge (6.1).
 
-*Figure placeholders*
+| | acc | f1 | balanced accuracy | ECE | test loss |
+|---|---|---|---|---|---|
+| sagebn_cross_entropy (untuned baseline) | 0.7014 | 0.4734 | 0.4661 | 0.0324 | 0.9753 |
+| **sagebn_cross_entropy (Optuna-tuned)** | **0.7178** | **0.5115** | 0.4961 | 0.0385 | 0.9097 |
+| sagebn_weighted_ce_p0.5 (manual, pre-tuning) | 0.6795 | 0.4961 | 0.5278 | 0.0257 | 1.2252 |
+| sagebn_weighted_ce_p0.5 (Optuna-tuned, tempered) | 0.6840 | 0.5016 | 0.5364 | 0.0211 | 1.1988 |
+| sagebn_weighted_ce (Optuna-tuned, untempered, avg of 2 runs*) | 0.6257 | 0.4670 | **0.5611** | 0.0303 | 1.4404 |
 
-- Training curve and t-SNE embedding for `sagebn_weighted_ce_p0.5` are
-  generated (see 6.4); copy from `outputs/figures/ogbn-arxiv/` to
-  `docs/figures/ogbn-arxiv/` when ready to link them here.
-- **TODO** per-class F1 bar chart, plain vs weighted CE (shows where the F1 gain comes from)
-- **TODO** reliability diagram from the calibration bins
-- **TODO** Optuna `plot_param_importances` and `plot_optimization_history`
+Note: as with GATv2 below, the local `sagebn_cross_entropy` checkpoint
+currently on disk is the untuned baseline, not this tuned result (same
+tag used by both the baseline grid run and this confirmation). Root cause
+found: the Colab notebook's Drive backup never synced the checkpoints
+folder, only metrics and the Optuna database, now fixed. The 0.7178 figure
+above is correct (this confirmation's own terminal output); `compare_best.py`
+run today would compare against the wrong checkpoint until this is
+re-confirmed with the fixed backup in place.
+
+*Two confirmation runs of the identical config (0.6423/0.6090 acc,
+0.5693/0.5529 balanced-acc) — averaged here since both are equally valid;
+the spread itself says this narrow, high-lr architecture is a noisier
+training regime than the CE-tuned config.
+
+**GATv2, cross entropy.** Given GATv2 needed a longer epoch budget just to
+converge (6.1), its search also used `epochs=1000`, `early_stop=150`, and a
+raised `prune_warmup=150` (the median pruner's default 20-epoch warmup,
+tuned for SAGE/SAGEBN's ~300-epoch searches, would have pruned GATv2 trials
+before they showed their real potential; `optuna_search.py` now exposes
+this as a parameter). Best trial: 2 layers, 128 hidden, 4 heads (512 total
+width, wider than the 8 heads x 32 used elsewhere), dropout 0.15, lr
+0.0032, AdamW, weight_decay 0.001, reaching `val_balanced_accuracy=0.5125`
+at epoch 918 on the tuned seed. Confirmed over all ten seeds:
+
+| | acc | f1 | balanced accuracy | ECE | test loss |
+|---|---|---|---|---|---|
+| GraphSAGE-BN (Optuna-tuned) | 0.7178 | 0.5115 | 0.4961 | 0.0385 | 0.9097 |
+| GATv2 (Optuna-tuned) | 0.7164 | 0.5056 | 0.4935 | 0.0317 | 0.9063 |
+| GATv2 (corrected, untuned) | 0.7112 | 0.4736 | 0.4598 | 0.0271 | 0.9367 |
+
+Tuning gained GATv2 +0.5 acc / +3.2 f1 / +3.4 balanced-accuracy points over
+its own untuned baseline. It now sits within 0.1-0.3 points of the tuned
+SAGEBN on every accuracy-family metric, close enough that the two are
+likely statistically indistinguishable (not yet tested with McNemar/
+Wilcoxon), while actually beating it on both calibration (ECE 0.0317 vs
+0.0385) and test loss (0.9063 vs 0.9097). Once given both proper training
+length and proper tuning, GATv2 is not a weaker architecture than SAGEBN
+for this task, it is a competitive one with better-calibrated predictions.
+
+Note: these numbers come from the confirmation run's own terminal output.
+Its checkpoint files were never retrieved locally; root cause found: the
+Colab notebook's Drive backup only synced the metrics and Optuna-database
+folders, never checkpoints, so every download just returned an older
+checkpoint already sitting in Drive (archived here in
+`outputs/archive/2026-09-13_gatv2_manual_fix/`), regardless of how many
+times the confirmation was re-run. Now fixed (`backup()` syncs checkpoints
+too); `compare_best.py` still reflects the older checkpoint until this is
+re-confirmed with the fix in place.
+
+**Takeaways**
+- Tuning helps CE a lot (+1.6 acc / +3.0 balanced-acc points on SAGEBN, and
+  a further balanced-accuracy gain still unconfirmed on GATv2); it barely
+  moves weighted CE (+0.5 acc / +0.9 balanced-acc), so the search space was
+  probably already close to optimal there. A wider grid might find more but
+  wasn't worth the compute given the small expected gain.
+- **Tempering matters more than tuning does.** Untempered weighted CE buys
+  the highest balanced accuracy but at a steep accuracy cost; tempering
+  (`weight_power=0.5`) claws back 4-7 accuracy points and roughly halves
+  ECE, for a smaller balanced-accuracy give-up. It's a genuine
+  overall-accuracy / class-balance trade-off, not a strict win either way.
+- Leaderboard context (ogb.stanford.edu, ogbn-arxiv): MLP 0.555, label
+  propagation 0.683, Node2vec 0.701, top entry (SimTeG+TAPE+RevGAT,
+  external data) 0.780. The CE-tuned 0.718 clears all three simple
+  baselines but is well below the top, which relies on heavier feature
+  engineering/ensembling, out of scope here. The point of this project is
+  the rigour of the controlled comparison, not chasing SOTA.
+
+![SAGEBN + tempered weighted CE, training curves](figures/arxiv/sagebn_weighted_ce_p0.5_training_curve.svg)
+![SAGEBN + tempered weighted CE, t-SNE embeddings](figures/arxiv/sagebn_weighted_ce_p0.5_tsne_embedding.svg)
 
 ---
 
@@ -439,10 +530,13 @@ uv run python src/node_classification/explain_best.py --dataset Cora --metric f1
 uv run python -m src.node_classification.ogb_run --model SAGE --loss cross_entropy \
     --num_layers 3 --lr 0.01 --hidden_channels 256 --dropout 0.5 --weight_decay 0 \
     --no-dataloader --no-scheduler --epochs 500 --early_stop 501
-# GATv2 (B), tuned separately from the above, not a controlled ablation of it:
+# GATv2 (B), tuned separately from the above, not a controlled ablation of it.
+# Corrected config (6.1): the original 500-epoch/lr 0.001/dropout 0.6 run was
+# undertrained; this is the one that actually converges.
 uv run python -m src.node_classification.ogb_run --model GATV2 --loss cross_entropy \
-    --num_layers 3 --heads 8 --hidden_channels 32 --dropout 0.6 --lr 0.001 \
-    --no-dataloader --no-scheduler --epochs 500 --early_stop 501
+    --num_layers 3 --heads 8 --hidden_channels 32 --dropout 0.3 --lr 0.005 \
+    --weight_decay 0.0005 --optimizer adamw \
+    --no-dataloader --no-scheduler --epochs 800 --early_stop 501
 
 # Post-training scripts, ogbn-arxiv (see 6.4 for the actual runs and results)
 uv run python src/node_classification/compare_best.py --dataset ogbn-arxiv \
@@ -454,31 +548,36 @@ uv run python src/node_classification/visualise_best.py --dataset ogbn-arxiv \
 # explain_best.py is not yet updated for OGB (still Planetoid-only); on a
 # large dataset --max_samples must be set explicitly regardless (6.5/8).
 
-# Hyperparameter search (D), not started (6.5)
-uv run python -m src.node_classification.optuna_search --dataset ogbn-arxiv --model SAGE --n_trials 30
+# Hyperparameter search (D), done (6.5): SAGEBN cross-entropy, then GATv2
+# once it needed its own longer epoch budget and pruner warmup (6.1)
+uv run python -m src.node_classification.optuna_search --dataset ogbn-arxiv --model SAGEBN \
+    --loss cross_entropy --metric balanced_accuracy --n_trials 30 --epochs 300 --early_stop 30
+uv run python -m src.node_classification.optuna_search --dataset ogbn-arxiv --model GATV2 \
+    --loss cross_entropy --metric balanced_accuracy --n_trials 30 --epochs 1000 \
+    --early_stop 150 --prune_warmup 150
 
 # Tests
-uv run --with pytest python -m pytest test/node_models_test.py test/utils_loader_test.py test/optuna_search_test.py
+uv run --with pytest python -m pytest test/
 ```
 
 Environment: Python 3.12, PyTorch 2.13, PyG 2.8, `uv` lockfile pinned to
-macOS arm64 (pyg-lib wheel). Training so far on Apple silicon (MPS).
+macOS arm64 (pyg-lib wheel). Hardware varied by workload: Cora training,
+model comparison (`compare_best.py`), and explainability (`explain_best.py`)
+ran locally on Apple silicon (MPS); ogbn-arxiv training ran on Colab GPUs,
+GATv2 on an A100 (its wider attention tensors needed the extra memory, see
+6.1), SAGE and SAGEBN on an L4.
 
 ---
 
 ## 8. Open items
 
-- ~~`compare_best.py` on arxiv currently compares every `<model>_<loss>` tag
-  found; a loss-level and a model-level comparison (6.3 and 6.4) need a
-  filter on the tag.~~ Done: `compare_best.py` and `visualise_best.py` now
+- `compare_best.py` and `visualise_best.py` now
   dispatch to `load_ogb_node` for OGB datasets (`best_model.load_dataset`),
   and `compare_best.py` takes `--tags` (which tags to compare) and `--label`
   (output filename suffix), used for the 6.3/6.4 loss-level and
   model-level comparisons.
 - Eval-mode train accuracy in the training log (currently measured with
   dropout active, which understates it).
-- AdamW as an alternative to Adam L2 when decay is needed; flag exists,
-  untested.
 - ogbn-products with the NeighborLoader and layer-wise inference, once the
   arxiv protocol is settled.
 - Custom circuit dataset: graph construction and the two prediction tasks.

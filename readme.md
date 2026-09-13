@@ -32,37 +32,57 @@ Full methodology and results: [docs/project_report.md](docs/project_report.md).
 - GNNExplainer on GATv2: removing the explanation subgraph flips 40 % of
   predictions, keeping only the explanation flips none.
 
+![GATv2 t-SNE embeddings on Cora](docs/figures/cora/gatv2_tsne_embedding.svg)
+![GATv2 training curves, all seeds](docs/figures/cora/gatv2_training_curve.svg)
+
 **ogbn-arxiv, ten seeds, mean over test split**
 
 | Model / loss | Accuracy | Macro F1 | Balanced accuracy | ECE ↓ |
 |---|---|---|---|---|
 | GraphSAGE (cross entropy) | 0.653 | 0.336 | 0.331 | 0.030 |
-| GATv2 (cross entropy) | 0.634 | 0.262 | 0.269 | 0.086 |
+| GATv2 (cross entropy) | 0.711 | 0.474 | 0.460 | 0.027 |
+| GATv2 (cross entropy, Optuna-tuned) | 0.716 | 0.506 | 0.494 | 0.032 |
 | GraphSAGE-BN (cross entropy) | 0.701 | 0.473 | 0.466 | 0.032 |
 | **GraphSAGE-BN (cross entropy, Optuna-tuned)** | **0.718** | **0.512** | 0.496 | 0.039 |
 | GraphSAGE-BN (weighted CE, tempered, Optuna-tuned) | 0.684 | 0.502 | **0.536** | **0.021** |
 
 - Balanced accuracy, not accuracy, is what matters here: 40 classes with a
   775× imbalance between the largest and smallest. GraphSAGE-BN's 0.701
-  accuracy comes with only 0.466 balanced accuracy, barely ahead of
-  Node2vec (0.701 accuracy on the OGB leaderboard, a shallow embedding
-  method with no message passing).
+  accuracy roughly matches Node2vec's 0.701 on the OGB leaderboard (a
+  shallow embedding method with no message passing), but its balanced
+  accuracy of only 0.466 is this project's own finding, there's no
+  like-for-like balanced accuracy reported for Node2vec to compare against.
+- GATv2's first result was badly undertrained (0.634 accuracy under the
+  same fixed epoch budget as the other models, still improving with no
+  plateau); a longer supplementary run (800 epochs vs 500, lower dropout)
+  reached 0.711 instead, on par with GraphSAGE-BN rather than clearly the
+  weakest architecture. It even edges ahead of GraphSAGE-BN on the
+  best-seed test split, though the two are statistically indistinguishable
+  on macro F1 at the seed level and GraphSAGE-BN keeps a small edge on
+  balanced accuracy. See `docs/project_report.md` 6.1/6.4 for the full
+  statistical comparison.
+- An Optuna search on this longer-trained GATv2 found an even better config
+  (2 layers, 128 hidden, 4 heads, dropout 0.15), confirmed over all ten
+  seeds at 0.7164 accuracy / 0.5056 f1 / 0.4935 balanced accuracy, within
+  0.1-0.3 points of the tuned GraphSAGE-BN on every accuracy-family metric,
+  while beating it on both calibration (ECE 0.0317 vs 0.0385) and test
+  loss. Once properly trained and tuned, GATv2 is a competitive
+  architecture here, not a weaker one (see `docs/project_report.md` 6.5).
+  That result costs more to get, though: GATv2 needed an A100 (vs L4 for
+  SAGE/SAGEBN), 800-1000 epochs instead of 500, and a raised Optuna pruner
+  warmup to search properly, around 5-7 minutes per seed versus SAGE's
+  faster convergence at the same width.
 - Optuna tuning helps the cross-entropy model (+1.6 accuracy / +3.0
   balanced-accuracy points); tempering the weighted-CE loss
   (`weight_power=0.5`) trades 3.4 accuracy points for 4.0 balanced-accuracy
   points and better calibration versus the tuned CE model, a genuine
-  accuracy/fairness trade-off rather than a strict win.
+  overall-accuracy / class-balance trade-off rather than a strict win.
 - The citation graph must be symmetrised or 64 % of test nodes receive no
   messages (accuracy stalls at 0.40); without BatchNorm, weight decay is
   what keeps lr 0.01 stable.
 
 ![SAGEBN + tempered weighted CE, training curves](docs/figures/arxiv/sagebn_weighted_ce_p0.5_training_curve.svg)
 ![SAGEBN + tempered weighted CE, t-SNE embeddings](docs/figures/arxiv/sagebn_weighted_ce_p0.5_tsne_embedding.svg)
-
-<!-- TODO figures: copy from outputs/figures once final
-![GATv2 t-SNE embeddings on Cora](docs/figures/cora/gatv2_tsne_embedding.svg)
-![Training curves, all seeds](docs/figures/cora/gatv2_training_curve.svg)
--->
 
 ---
 
@@ -116,6 +136,13 @@ uv run python -m src.node_classification.ogb_run --model SAGE --loss cross_entro
     --num_layers 3 --lr 0.01 --hidden_channels 256 --dropout 0.5 --weight_decay 0 \
     --no-dataloader --no-scheduler --epochs 500 --early_stop 501
 
+# GATv2, corrected: needs a longer budget than the rest of the grid to
+# actually converge (see docs/project_report.md 6.1)
+uv run python -m src.node_classification.ogb_run --dataset ogbn-arxiv \
+    --model GATV2 --loss cross_entropy --num_layers 3 --hidden_channels 32 \
+    --heads 8 --dropout 0.3 --lr 0.005 --weight_decay 0.0005 --optimizer adamw \
+    --epochs 800 --early_stop 501 --no-scheduler --no-dataloader --log_steps 50
+
 uv run python src/node_classification/compare_best.py --dataset ogbn-arxiv \
     --tags sage_cross_entropy sagebn_cross_entropy gatv2_cross_entropy --label architectures
 uv run python src/node_classification/visualise_best.py --dataset ogbn-arxiv \
@@ -143,8 +170,12 @@ does and how the results were produced.
 ## Roadmap
 
 Node classification (Cora and ogbn-arxiv) is finished, including the Optuna
-search and GNNExplainer-based explainability metrics on Cora. What's left is
-optional infrastructure and unstarted extensions:
+search and GNNExplainer-based explainability metrics on Cora. Reported
+metrics for the tuned SAGEBN and GATv2 results are final (read from each
+run's own evaluation, not from reloading a checkpoint), but the checkpoint
+artifacts for both need reconfirming, a Colab backup gap meant they weren't
+saved to Drive; see `docs/project_report.md` 6.5 for detail. What's left
+otherwise is optional infrastructure and unstarted extensions:
 
 - ogbn-products, as a stepping stone if a bigger dataset is needed later,
   not an active task. The NeighborLoader/layer-wise inference path is
@@ -158,8 +189,6 @@ optional infrastructure and unstarted extensions:
 - Graph classification and link prediction on the custom circuit dataset.
 
 ---
-
-## Acknowledgments
 
 ## Acknowledgments
 

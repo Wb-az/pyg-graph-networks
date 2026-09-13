@@ -1,13 +1,69 @@
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
 import pandas as pd
 import pytest
+import torch
+from torch_geometric.data import Data
 
-from src.node_classification.ogb_run import clear_tag_outputs, write_summary, SUMMARY_METRICS
+from src.node_classification import ogb_run
+from src.node_classification.ogb_run import (build_parser, clear_tag_outputs, main,
+                                             write_summary, SUMMARY_METRICS)
 
 
 def _touch(path):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("x")
     return path
+
+
+def _synthetic_ogb_node(*_args, **_kwargs):
+    """Stand-in for load_ogb_node: a tiny graph, shaped like its real return."""
+    torch.manual_seed(0)
+    n, f, c = 60, 6, 3
+    x = torch.randn(n, f)
+    edge_index = torch.randint(0, n, (2, 200))
+    y = torch.randint(0, c, (n,))
+    data = Data(x=x, edge_index=edge_index, y=y)
+    perm = torch.randperm(n)
+    for name, idx in (("train_mask", perm[:30]), ("val_mask", perm[30:45]),
+                      ("test_mask", perm[45:])):
+        mask = torch.zeros(n, dtype=torch.bool)
+        mask[idx] = True
+        setattr(data, name, mask)
+    dataset = SimpleNamespace(num_node_features=f, num_classes=c)
+    return dataset, data, None
+
+
+@pytest.fixture
+def two_seed_args(tmp_path):
+    parser = build_parser()
+    args = parser.parse_args([
+        "--dataset", "ogbn-arxiv", "--model", "SAGE", "--num_layers", "2",
+        "--hidden_channels", "8", "--epochs", "2", "--early_stop", "5",
+        "--no-dataloader", "--no-scheduler", "--seeds", "0", "1",
+        "--eval", "full", "--log_steps", "1",
+    ])
+    return args
+
+
+def test_seed_loop_releases_cuda_cache_between_seeds(monkeypatch, two_seed_args, tmp_path):
+    """Regression guard: the seed loop must release its optimizer/scheduler and
+    call empty_cache() after every seed, not just at the end of the run, or a
+    long multi-seed confirmation can accumulate reserved-but-unused CUDA
+    memory across seeds and OOM partway through (see ogb_run.py's loop)."""
+    monkeypatch.setattr(ogb_run, "load_ogb_node", _synthetic_ogb_node)
+    monkeypatch.setattr(ogb_run, "get_project_root", lambda: tmp_path)
+    # Keep the model on CPU (this machine has no CUDA build); only spoof
+    # is_available() for the `if torch.cuda.is_available():` cleanup guard.
+    monkeypatch.setattr(ogb_run, "get_device", lambda: torch.device("cpu"))
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    empty_cache = MagicMock()
+    monkeypatch.setattr(torch.cuda, "empty_cache", empty_cache)
+
+    main(two_seed_args)
+
+    assert empty_cache.call_count >= len(two_seed_args.seeds)
 
 
 def test_clear_tag_outputs_removes_only_exact_tag(tmp_path):

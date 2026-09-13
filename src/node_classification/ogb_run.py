@@ -250,6 +250,15 @@ def main(args):
                   f"test_acc mean={summary_df.loc['Test acc', 'mean']:.4f}  -> {summary_path}")
             print("=" * 100)
 
+        # Release this seed's optimizer/scheduler state before the next seed
+        # builds fresh ones; without this, PyTorch's caching allocator can
+        # accumulate reserved-but-unreleased memory over many sequential
+        # seeds and OOM partway through a run even though each seed's own
+        # peak usage is fine on its own.
+        del optimizer, criterion, scheduler
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
     history_df = pd.DataFrame(all_history)
     results_df = pd.DataFrame(run_results).sort_values("seed").reset_index(drop=True)
     results_df.to_csv(results_path, index=False)
