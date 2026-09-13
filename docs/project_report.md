@@ -582,6 +582,7 @@ GATv2 on an A100 (its wider attention tensors needed the extra memory, see
 - ogbn-products with the NeighborLoader and layer-wise inference, once the
   arxiv protocol is settled.
 - Custom circuit dataset: graph construction and the two prediction tasks.
+
 **Temporal / inductive framing of ogbn-arxiv.** The standard split (train on papers through 2017, validate on 2018, test from 2019) is transductive, not inductive: `load_ogb_node` loads one static graph, and full-batch training passes messages over the whole citation network, including test-year edges and features, on every forward pass. Only the loss is time-restricted.
 
 A genuinely inductive setup would train on the train-year subgraph only, then introduce validation-year and test-year nodes and edges incrementally, classifying each using only the graph information available at that point. This is closer to GraphSAGE's original inductive framing than the setup used here. It would require temporal graph snapshots that `load_ogb_node` does not currently build, and would potentially motivate dynamic or temporal GNN architectures such as EvolveGCN, DySAT or Temporal Graph Networks rather than a configuration change to the existing models.
