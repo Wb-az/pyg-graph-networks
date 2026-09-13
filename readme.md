@@ -32,11 +32,32 @@ Full methodology and results: [docs/project_report.md](docs/project_report.md).
 - GNNExplainer on GATv2: removing the explanation subgraph flips 40 % of
   predictions, keeping only the explanation flips none.
 
-**ogbn-arxiv** (in progress): ten seeds, three losses (cross entropy,
-class-weighted, focal), a BatchNorm variant, and an Optuna search. Two findings
-that shaped the protocol are already in: the citation graph must be
-symmetrised or 64 % of test nodes receive no messages (accuracy stalls at
-0.40), and without BatchNorm, weight decay is what keeps lr 0.01 stable.
+**ogbn-arxiv, ten seeds, mean over test split**
+
+| Model / loss | Accuracy | Macro F1 | Balanced accuracy | ECE ↓ |
+|---|---|---|---|---|
+| GraphSAGE (cross entropy) | 0.653 | 0.336 | 0.331 | 0.030 |
+| GATv2 (cross entropy) | 0.634 | 0.262 | 0.269 | 0.086 |
+| GraphSAGE-BN (cross entropy) | 0.701 | 0.473 | 0.466 | 0.032 |
+| **GraphSAGE-BN (cross entropy, Optuna-tuned)** | **0.718** | **0.512** | 0.496 | 0.039 |
+| GraphSAGE-BN (weighted CE, tempered, Optuna-tuned) | 0.684 | 0.502 | **0.536** | **0.021** |
+
+- Balanced accuracy, not accuracy, is what matters here: 40 classes with a
+  775× imbalance between the largest and smallest. GraphSAGE-BN's 0.701
+  accuracy comes with only 0.466 balanced accuracy, barely ahead of
+  Node2vec (0.701 accuracy on the OGB leaderboard, a shallow embedding
+  method with no message passing).
+- Optuna tuning helps the cross-entropy model (+1.6 accuracy / +3.0
+  balanced-accuracy points); tempering the weighted-CE loss
+  (`weight_power=0.5`) trades 3.4 accuracy points for 4.0 balanced-accuracy
+  points and better calibration versus the tuned CE model, a genuine
+  accuracy/fairness trade-off rather than a strict win.
+- The citation graph must be symmetrised or 64 % of test nodes receive no
+  messages (accuracy stalls at 0.40); without BatchNorm, weight decay is
+  what keeps lr 0.01 stable.
+
+![SAGEBN + tempered weighted CE, training curves](docs/figures/arxiv/sagebn_weighted_ce_p0.5_training_curve.svg)
+![SAGEBN + tempered weighted CE, t-SNE embeddings](docs/figures/arxiv/sagebn_weighted_ce_p0.5_tsne_embedding.svg)
 
 <!-- TODO figures: copy from outputs/figures once final
 ![GATv2 t-SNE embeddings on Cora](docs/figures/cora/gatv2_tsne_embedding.svg)
@@ -121,34 +142,31 @@ does and how the results were produced.
 
 ## Roadmap
 
-- Hyperparameter search (Optuna) on the finished ogbn-arxiv grid.
-- ogbn-products with the NeighborLoader and layer-wise inference.
+Node classification (Cora and ogbn-arxiv) is finished, including the Optuna
+search and GNNExplainer-based explainability metrics on Cora. What's left is
+optional infrastructure and unstarted extensions:
+
+- ogbn-products, as a stepping stone if a bigger dataset is needed later,
+  not an active task. The NeighborLoader/layer-wise inference path is
+  already tested and working (arxiv pilots with it scored higher than
+  full-batch SAGEBN, though those models were also larger, so that isn't
+  yet a clean ablation of batching alone versus model capacity). The actual
+  new work would be the dataset processing itself: ogbn-products isn't
+  already downloaded and prepared the way arxiv is, and at ~2.4M nodes /
+  61M edges it's a different scale than anything `load_ogb_node` has
+  handled so far.
 - Graph classification and link prediction on the custom circuit dataset.
 
 ---
 
 ## Acknowledgments
 
-**The project.** The idea, the experimental design, and the statistical
-methodology, factorial architecture/loss ablations, grid search, nonparametric
-paired comparison, balanced metrics under class imbalance, are the author's,
-carried over from a background in explainability and compliance and standard
-practice across prior work. An AI tool did not propose this project or its
-research questions.
+## Acknowledgments
 
-**How it was built.** Implementation went through iterative, reviewed
-collaboration with AI coding assistants: a change was proposed, explained
-(what it did and how it would affect other files), tested, and only then
-accepted, never applied on a tool's own authority.
+**Project ownership.** The research questions, experimental design, model comparisons, evaluation strategy, statistical methodology, interpretation of results, and final engineering decisions are the author's work. AI tools were not used to originate the project or determine its research objectives.
 
-**Tools.** Claude (Anthropic) and Codex were used as coding assistants, to
-accelerate writing and debugging the implementation, and as independent
-second reviewers of each other's output. This is a solo project: reaching
-this scope, a full ogbn-arxiv extension with resume-safe training,
-statistical comparison, and explainability, would not have been possible
-without that assistance. This also matters beyond attribution: the pipeline
-is meant to be reusable, point it at a new dataset already in, or convertible
-to, PyTorch Geometric's format, and the same model recipe, training loop,
-selection rule, and statistical comparison apply. Debugging and testing were
-AI-assisted specifically so that reuse is reliable, not just so the original
-results were produced faster.
+**AI-assisted development.** AI coding assistants were used during implementation to accelerate code development, debugging, refactoring, documentation, and review. Suggestions were discussed and evaluated iteratively: proposed changes were examined for their purpose and impact, tested against the project, and accepted, modified, or rejected by the author.
+
+**Tools and responsibility.** Claude (Anthropic) and Codex (OpenAI), integrated into the development environment, were used to generate and cross-check implementation suggestions. AI-generated output was not treated as an authoritative source of results or methodology. The author remains responsible for the code, experimental design, statistical analysis, interpretation, and conclusions presented in this repository.
+
+AI assistance also supported testing and debugging of the reusable pipeline. The aim was not only to accelerate development, but to make the implementation sufficiently robust to apply the same model, training, selection, evaluation, and comparison framework to additional datasets.
