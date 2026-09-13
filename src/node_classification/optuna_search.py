@@ -212,7 +212,7 @@ def run_study(dataset: str = "ogbn-arxiv", model: str = "SAGE", n_trials: int = 
               loss: str = "cross_entropy", gamma: float = 2.0, weight_power: float = 1.0,
               timeout: float | None = None,
               study_name: str | None = None, persist: bool = True, resume: bool = True,
-              prune: bool = True, data=None, root: Path | None = None,
+              prune: bool = True, prune_warmup: int = 20, data=None, root: Path | None = None,
               show_progress_bar: bool = False) -> optuna.Study:
     """Run (or resume) a search and write the best configuration to disk.
 
@@ -224,6 +224,11 @@ def run_study(dataset: str = "ogbn-arxiv", model: str = "SAGE", n_trials: int = 
         weights (not searched by ``suggest_params``); pass e.g. 0.5 to search
         architecture/optimizer choices around an already-tempered weighting
         instead of the untempered default.
+    :param prune_warmup: Epochs before the median pruner starts comparing a
+        trial against others (``MedianPruner``'s ``n_warmup_steps``). Default
+        20 suits SAGE/SAGEBN's ~300-epoch searches; a model that converges
+        much slower (GATv2 needs 700+ epochs) should pass a larger value, or
+        a trial can be pruned before it shows its real potential.
     :param persist: Store the study in ``outputs/optuna/<study_name>.db``.
         False keeps it in memory (tests, throwaway runs).
     :param data: Preloaded graph, to skip the load in a notebook session.
@@ -253,7 +258,7 @@ def run_study(dataset: str = "ogbn-arxiv", model: str = "SAGE", n_trials: int = 
     study = optuna.create_study(
         study_name=study_name, storage=storage, load_if_exists=resume,
         direction=METRICS[metric], sampler=optuna.samplers.TPESampler(seed=0),
-        pruner=(optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=20)
+        pruner=(optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=prune_warmup)
                 if prune else optuna.pruners.NopPruner()))
     if resume and len(study.trials):
         print(f"Resuming {study_name}: {len(study.trials)} trials already stored")
@@ -310,13 +315,18 @@ def main(argv=None):
     parser.add_argument("--resume", action=argparse.BooleanOptionalAction, default=True,
                         help="continue a stored study with the same name")
     parser.add_argument("--prune", action=argparse.BooleanOptionalAction, default=True,
-                        help="median pruning after 20 epochs (off: every trial runs to early stop)")
+                        help="median pruning after --prune_warmup epochs "
+                             "(off: every trial runs to early stop)")
+    parser.add_argument("--prune_warmup", type=int, default=20,
+                        help="epochs before the median pruner starts comparing trials; "
+                             "raise this for a model that converges slower than ~300 epochs")
     args = parser.parse_args(argv)
     run_study(dataset=args.dataset, model=args.model, n_trials=args.n_trials,
               seeds=tuple(args.seeds), epochs=args.epochs, early_stop=args.early_stop,
               metric=args.metric, loss=args.loss, gamma=args.gamma,
               weight_power=args.weight_power, timeout=args.timeout,
-              study_name=args.study_name, resume=args.resume, prune=args.prune)
+              study_name=args.study_name, resume=args.resume, prune=args.prune,
+              prune_warmup=args.prune_warmup)
 
 
 if __name__ == "__main__":
